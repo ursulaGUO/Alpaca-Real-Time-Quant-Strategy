@@ -1,12 +1,18 @@
 from atproto import Client, models
 from datetime import datetime, timezone
-import csv
+import argparse
 import os
+from dotenv import load_dotenv
 import sqlite3
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer 
 
+dotenv_path = os.path.expanduser('~/.secrets/.env')
+load_dotenv(dotenv_path)
+emailname = os.getenv('blueSky_user_name')
+password = os.getenv('blueSky_password')
+
 client = Client()
-client.login('18217786504a@gmail.com', 'Ann266266')
+client.login(emailname, password)
 
 DB_FILE = "blusky_posts.db"
 
@@ -123,13 +129,31 @@ def find_head_or_tail_date_db(file, keyword, tail=True):
     conn.close()
     return None if result is None else datetime.fromisoformat(result[0].replace("Z", "+00:00"))
 
+def parse_argument():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description="Fetch posts from BlueSky.")
+    parser.add_argument("-keyword", type=str, help="Keyword to search for.")
+    parser.add_argument("-since", type=str, help="Start date for search.")
+    args = parser.parse_args()
+
+    if args.keyword is None:
+        raise ValueError("Keyword required to run dataFromBlueSky.py")
+    keyword = args.keyword
+    
+    if args.since is None:
+        raise ValueError("Start date required to run dataFromBlueSky.py")
+    since = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return keyword, since
+
 def main():
-    keyword = "microsoft"
+    #keyword = "microsoft"
+    keyword, default_since = parse_argument()
+
+
     print("Innitialize database")
     initialize_db()
 
     # Define default search range
-    default_since = datetime(2025, 2, 28, 0, 0, 0, tzinfo=timezone.utc)
     default_until = datetime(2025, 3, 3, 23, 59, 59, tzinfo=timezone.utc)
 
     # Get timestamps of the latest and earliest posts

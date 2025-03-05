@@ -41,13 +41,26 @@ def main():
         return
     else:
         #print(f"posts {posts}")
-        save_posts_to_file(posts)
+        save_posts_to_file(posts,keyword)
+        next_time = find_next_post('bluesky_posts.txt', keyword)
+        print(f"End time is {next_time}")
+
+def find_next_post(filename, keyword):
+    """Find the last post's Date in the file"""
+    with open(filename, 'r', encoding='utf-8') as file:
+        lines = file.readlines()
+        for i in range(len(lines)-1, 0, -1):
+            line = lines[i]
+            if line.startswith(f"Keyword: {keyword}"):
+                Date = lines[i+2]
+                return Date
         
 
-def save_posts_to_file(posts, filename='bluesky_posts.txt'):
+def save_posts_to_file(posts, keyword, filename='bluesky_posts.txt'):
     """save post to a text file"""
     with open(filename, 'w', encoding='utf-8') as file:
         for post in posts:
+            file.write(f"Keyword: {keyword}\n")
             file.write(f"Author: {post.author.handle}\n")
             file.write(f"Date: {post.record.created_at}\n")
             file.write(f"Likes: {post.like_count}\n")

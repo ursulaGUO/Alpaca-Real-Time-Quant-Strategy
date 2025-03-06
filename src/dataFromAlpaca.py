@@ -1,8 +1,10 @@
-import alpaca_trade_api as tradeapi
-from dotenv import load_dotenv
 import os
 import time
+import sqlite3
 import pandas as pd
+import alpaca_trade_api as tradeapi
+from dotenv import load_dotenv
+from datetime import datetime, timezone
 
 # Load secrets
 dotenv_path = os.path.expanduser("~/.secrets/.env")
@@ -10,90 +12,110 @@ load_dotenv(dotenv_path)
 api_key = os.getenv("alpaca_api_key")
 api_secret = os.getenv("alpaca_api_secret")
 base_url = os.getenv("alpaca_base_url")
-end_point = os.getenv("alpaca_end_point")
+
 print("Successfully loaded Alpaca secrets.")
-
-
 
 # Initialize Alpaca API
 api = tradeapi.REST(api_key, api_secret, base_url, api_version='v2')
 
-symbol_list = ['AAPL', 
-               'MSFT', 
-               'GOOGL', 
-               'AMZN', 
-               'TSLA',
-               'NVDA',]
-more_list = ['F',
-               'LCID',
-               'PLTR',
-               'INTC',
-               'SMCI',
-               'NU',
-               'BBD',
-               'LYG',
-               'BTG',
-               'PSLV',
-               'MARA',
-               'AAL',
-               'IQ',
-               'BAC',
-               'SOFI',
-               'ABEV',
-               'RGTI',
-               'BABA',
-               'WBD',
-               'RIG',
-               'T',
-               'MRNA',
-               ]
+# Define stock symbols
+symbol_list = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA']
+more_list = ['F', 'LCID', 'PLTR', 'INTC', 'SMCI', 'NU', 'BBD', 'LYG', 
+             'BTG', 'PSLV', 'MARA', 'AAL', 'IQ', 'BAC', 'SOFI', 'ABEV', 
+             'RGTI', 'BABA', 'WBD', 'RIG', 'T', 'MRNA']
+all_symbols = symbol_list + more_list
 
-
-# Get historical market data
+# Define parameters
 timeframe = '5Min'
-start_date = '2023-03-01' # Bluesky launched in February 2023
+start_date = '2023-03-01'
 end_date = "2025-03-01"
+db_file = "data/trade_data.db"
+rate_limit = 2  # Alpaca API rate limit
 
-def load_existing_historical(filename):
-    if os.path.exists(filename):
-        return pd.read_csv(filename)
-    else:
-        return pd.DataFrame()
+# Create SQLite connection
+def create_connection(db_file):
+    return sqlite3.connect(db_file)
+
+# Create table in SQLite
+def create_table(conn):
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS stock_prices (
+            timestamp TEXT,
+            symbol TEXT,
+            open REAL,
+            high REAL,
+            low REAL,
+            close REAL,
+            volume INTEGER,
+            trade_count INTEGER DEFAULT NULL,  -- Ensure trade_count can be NULL
+            PRIMARY KEY (timestamp, symbol)
+        )
+    """)
+    conn.commit()
+
+# Check last timestamp for a stock
+def get_last_timestamp(conn, symbol):
+    query = "SELECT MAX(timestamp) FROM stock_prices WHERE symbol = ?"
+    cursor = conn.execute(query, (symbol,))
+    last_timestamp = cursor.fetchone()[0]
+
+    if last_timestamp:
+        # Convert to ISO format for Alpaca API
+        last_timestamp = datetime.strptime(last_timestamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).isoformat()
     
+    return last_timestamp  # Returns None if no data exists
 
+# Save data to SQLite using "INSERT OR REPLACE" to prevent duplicates
+def save_to_db(conn, df):
+    cursor = conn.cursor()
 
+    for _, row in df.iterrows():
+        cursor.execute("""
+            INSERT OR REPLACE INTO stock_prices (timestamp, symbol, open, high, low, close, volume, trade_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (row["timestamp"].to_pydatetime().strftime("%Y-%m-%d %H:%M:%S"), 
+              row["symbol"], 
+              row["open"], 
+              row["high"], 
+              row["low"], 
+              row["close"], 
+              row["volume"], 
+              row.get("trade_count", None)))
 
-def fetch_historical_data(symbols, timeframe, start, end, folder_destination):
-    
+    conn.commit()
+
+# Fetch historical stock data and store it in SQLite
+def fetch_historical_data(symbols, timeframe, start, end, db_file):
+    conn = create_connection(db_file)
+    create_table(conn)
     request_count = 0
-    rate_limit = 2  # Alpaca API rate limit
-    for symbol in symbols:
-        filename = f"{folder_destination}/{symbol}_historical.csv"
-        ticker_history = load_existing_historical(filename)
-        # If symbol already has data, continue from the last recorded timestamp
-        if not ticker_history.empty and symbol in ticker_history["symbol"].values:
-            last_timestamp = ticker_history[ticker_history["symbol"] == symbol]["timestamp"].max()
-            start = last_timestamp.strftime("%Y-%m-%dT%H:%M:%S")  # Resume from last recorded time
 
-        print(f"Fetching 5Min historical data for {symbol} from {start} to {end}...")
+    for symbol in symbols:
+        last_timestamp = get_last_timestamp(conn, symbol)
+        start_time = last_timestamp if last_timestamp else start  # Resume from last fetched data
+
+        print(f"Fetching 5Min historical data for {symbol} from {start_time} to {end}...")
 
         try:
-            # Fetch data
-            bars = api.get_bars(symbol, timeframe, start=start, end=end).df
-            bars["symbol"] = symbol  # Add symbol column
+            # Fetch stock price data
+            bars = api.get_bars(symbol, timeframe, start=start_time, end=end).df
+            bars["symbol"] = symbol  
+            bars.reset_index(inplace=True)
 
             if bars.empty:
                 print(f"No new data for {symbol}, skipping...")
                 continue
 
-            # Append new data to existing
-            ticker_history = pd.concat([ticker_history, bars])
+            # Drop trade_count if not present in response
+            if "trade_count" not in bars.columns:
+                bars["trade_count"] = None
 
-            # Save to CSV after each fetch
-            ticker_history.to_csv(filename)
-            print(f"Saved {symbol} data to {filename}")
+            # Save new data to SQLite
+            save_to_db(conn, bars)
+            print(f"Saved {symbol} data to {db_file}")
 
-            # Handle request count to prevent hitting the rate limit
+            # Handle API rate limit
             request_count += 1
             if request_count >= rate_limit:
                 print("Rate limit reached, sleeping for 60 seconds...")
@@ -103,7 +125,8 @@ def fetch_historical_data(symbols, timeframe, start, end, folder_destination):
         except Exception as e:
             print(f"Error fetching data for {symbol}: {e}")
 
-    return ticker_history
+    conn.close()
+    print("Data stored successfully!")
 
-df = fetch_historical_data(symbol_list, timeframe, start_date, end_date,"./historical_data")
-print("Finished fetching historical data.")
+# Fetch and store data in SQLite
+fetch_historical_data(symbol_list, timeframe, start_date, end_date, db_file)

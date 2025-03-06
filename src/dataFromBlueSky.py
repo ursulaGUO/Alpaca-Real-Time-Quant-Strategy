@@ -14,14 +14,14 @@ password = os.getenv('blueSky_password')
 client = Client()
 client.login(emailname, password)
 
-DB_FILE = "blusky_posts.db"
+DB_FILE = "data/trade_data.db"
 
 def initialize_db():
     """Create a new SQLite database file with a posts table."""
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS posts (
+            CREATE TABLE IF NOT EXISTS bluesky_posts (
                 keyword TEXT,
                 author TEXT,
                 date TEXT,
@@ -42,24 +42,30 @@ def ensure_datetime(value):
         return value.isoformat().replace("+00:00", "Z")
     return value
 
-def search_bluesky_posts(client, keyword, since, until, limit=100):
-    """Search for posts with a keyword between since and until timestamps."""
+def search_bluesky_posts(client, keyword_list, since, until, limit=100):
+    """Search for BlueSky posts containing any of the keywords between since and until timestamps."""
     since_str = ensure_datetime(since)
     until_str = ensure_datetime(until)
 
+    # Join multiple keywords with OR to broaden search results
+    query_string = " OR ".join(keyword_list)
+
     params = models.AppBskyFeedSearchPosts.Params(
-        q=keyword,
+        q=query_string,
         since=since_str,
         until=until_str,
         sort="latest",
+        lang="en",
         limit=limit
     )
+    
     response = client.app.bsky.feed.search_posts(params)
 
     if not hasattr(response, "posts") or not response.posts:
         return []
     
     return response.posts
+
 
 analyzer = SentimentIntensityAnalyzer()
 
@@ -69,7 +75,7 @@ def get_sentiment_score(text):
     return sentiment["compound"]
 
 def save_posts_to_db(posts, keyword):
-    """Save posts to an SQLite database."""
+    """Save bluesky_posts to an SQLite database."""
     try:
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
@@ -78,7 +84,7 @@ def save_posts_to_db(posts, keyword):
                 try:
                     sscore = get_sentiment_score(post.record.text)
                     cursor.execute("""
-                        INSERT INTO posts (keyword, author, date, likes, shares, quotes, replies, text, sentiment_score)
+                        INSERT INTO bluesky_posts (keyword, author, date, likes, shares, quotes, replies, text, sentiment_score)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (keyword, 
                           post.author.handle, 
@@ -102,7 +108,7 @@ def get_top_positive_posts(keyword, limit=5):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT author, date, text, sentiment_score FROM posts
+        SELECT author, date, text, sentiment_score FROM bluesky_posts
         WHERE keyword = ? ORDER BY sentiment_score DESC LIMIT ?
     """, (keyword, limit))
     
@@ -116,12 +122,12 @@ def find_head_or_tail_date_db(file, keyword, tail=True):
     cursor = conn.cursor()
     if tail:
         cursor.execute("""
-            SELECT date FROM posts
+            SELECT date FROM bluesky_posts
             WHERE keyword = ? ORDER BY date DESC LIMIT 1
         """, (keyword,))
     else:
         cursor.execute("""
-            SELECT date FROM posts
+            SELECT date FROM bluesky_posts
             WHERE keyword = ? ORDER BY date ASC LIMIT 1
         """, (keyword,))
     
@@ -129,96 +135,128 @@ def find_head_or_tail_date_db(file, keyword, tail=True):
     conn.close()
     return None if result is None else datetime.fromisoformat(result[0].replace("Z", "+00:00"))
 
-def parse_argument():
-    """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description="Fetch posts from BlueSky.")
-    parser.add_argument("-keyword", type=str, help="Keyword to search for.")
-    parser.add_argument("-since", type=str, help="Start date for search.")
-    args = parser.parse_args()
-
-    if args.keyword is None:
-        raise ValueError("Keyword required to run dataFromBlueSky.py")
-    keyword = args.keyword
-    
-    if args.since is None:
-        raise ValueError("Start date required to run dataFromBlueSky.py")
-    since = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    return keyword, since
-
-def main():
-    #keyword = "microsoft"
-    keyword, default_since = parse_argument()
 
 
-    print("Innitialize database")
+def download_bluesky_posts(keyword_dict, since):
+    """Download BlueSky posts for a list of keywords."""
+
     initialize_db()
+    default_since = datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    default_until = datetime.now(timezone.utc)  # Fixed end date for forward search
 
-    # Define default search range
-    default_until = datetime(2025, 3, 3, 23, 59, 59, tzinfo=timezone.utc)
+    for symbol, keyword_list in keyword_dict.items():
+        print(f"Searching for posts related to '{symbol}' using keywords: {keyword_list}")
 
-    # Get timestamps of the latest and earliest posts
-    if 'bluesky_posts.csv' in os.listdir():
-        latest_timestamp = find_head_or_tail_date_db('bluesky_posts.csv', keyword, tail=True)
-        earliest_timestamp = find_head_or_tail_date_db('bluesky_posts.csv', keyword, tail=False)
-    else:
-        latest_timestamp = None
-        earliest_timestamp = None
+        # Get the latest and earliest timestamps from the database
+        latest_timestamp = find_head_or_tail_date_db(DB_FILE, symbol, tail=True)
+        earliest_timestamp = find_head_or_tail_date_db(DB_FILE, symbol, tail=False)
 
-    # Set default values if no data exists
-    if latest_timestamp is None:
-        latest_timestamp = default_since
-    if earliest_timestamp is None:
-        earliest_timestamp = default_until
+        # Set default values if no previous data exists
+        latest_timestamp = latest_timestamp or default_since
+        earliest_timestamp = earliest_timestamp or default_until
 
-    # Store previous timestamps to detect repeated fetches
-    last_fetched_latest = None
-    last_fetched_earliest = None
+        # Track last fetched timestamps to detect repeated fetches
+        last_fetched_latest = None
+        last_fetched_earliest = None
 
-    # Fetch newer posts (forward search)
-    while latest_timestamp < default_until:
-        print(f"Fetching newer posts from {latest_timestamp} to {default_until}...")
-        posts_forward = search_bluesky_posts(client, keyword, latest_timestamp, default_until)
+        # Forward search: Fetch newer posts
+        while latest_timestamp < default_until:
+            print(f"Fetching newer posts from {latest_timestamp} to {default_until}...")
+            posts_forward = search_bluesky_posts(client, keyword_list, latest_timestamp, default_until)
 
-        if not posts_forward:
-            print("No more newer posts found.")
-            break 
+            if not posts_forward:
+                print("No more newer posts found.")
+                break 
 
-        # Check if we keep fetching the same newest post
-        newest_post_time = datetime.fromisoformat(posts_forward[0].record.created_at.replace("Z", "+00:00"))
-        if newest_post_time == last_fetched_latest:
-            print("Detected same newest post, stopping forward search.")
-            break 
-        
-        save_posts_to_db(posts_forward, keyword)
+            # Check if the newest post is the same as last fetched
+            newest_post_time = datetime.fromisoformat(posts_forward[0].record.created_at.replace("Z", "+00:00"))
+            if newest_post_time == last_fetched_latest:
+                print("Detected same newest post, stopping forward search.")
+                break 
 
-        # Update latest timestamp and store last fetched post
-        last_fetched_latest = newest_post_time
-        latest_timestamp = newest_post_time
+            save_posts_to_db(posts_forward, symbol)
 
-    # Fetch older posts (backward search)
-    while earliest_timestamp > default_since:
-        print(f"Fetching older posts from {default_since} to {earliest_timestamp}...")
-        posts_backward = search_bluesky_posts(client, keyword, default_since, earliest_timestamp)
+            # Update latest timestamp and track last fetched post
+            last_fetched_latest = newest_post_time
+            latest_timestamp = newest_post_time
 
-        if not posts_backward:
-            print("No more older posts found.")
-            break 
+        # Backward search: Fetch older posts
+        while earliest_timestamp > default_since:
+            print(f"Fetching older posts from {default_since} to {earliest_timestamp}...")
+            posts_backward = search_bluesky_posts(client, keyword_list, default_since, earliest_timestamp)
 
-        # Check if we keep fetching the same oldest post
-        oldest_post_time = datetime.fromisoformat(posts_backward[-1].record.created_at.replace("Z", "+00:00"))
-        if oldest_post_time == last_fetched_earliest:
-            print("Detected same oldest post, stopping backward search.")
-            break
+            if not posts_backward:
+                print("No more older posts found.")
+                break 
 
-        save_posts_to_db(posts_backward, keyword)
+            # Check if the oldest post is the same as last fetched
+            oldest_post_time = datetime.fromisoformat(posts_backward[-1].record.created_at.replace("Z", "+00:00"))
+            if oldest_post_time == last_fetched_earliest:
+                print("Detected same oldest post, stopping backward search.")
+                break
 
-        # Update earliest timestamp and store last fetched post
-        last_fetched_earliest = oldest_post_time
-        earliest_timestamp = oldest_post_time
-    
-    print(get_top_positive_posts(keyword))
+            save_posts_to_db(posts_backward, symbol)
+
+            # Update earliest timestamp and track last fetched post
+            last_fetched_earliest = oldest_post_time
+            earliest_timestamp = oldest_post_time
+
+        print(f"Finished downloading all BlueSky posts for '{symbol}'")
 
     print("Finished collecting all available posts.")
 
-if __name__ == "__main__":
-    main()
+
+
+stock_dict = {
+    "AAPL": [
+        "Apple",
+    ],
+    "MSFT": [
+        "Microsoft",
+    ],
+    "GOOGL": [
+        "Google",
+    ],
+    "AMZN": [
+        "Amazon",
+    ],
+    "TSLA": [
+        "Tesla",
+    ],
+    "NVDA": [
+        "Nvidia",
+    ]
+}
+
+
+new_dict = {
+    "AAPL": [
+        "Apple",
+        "AAPL",
+        "Tim Cook",
+    ],
+    "MSFT": [
+        "MSFT",
+        "Microsoft",
+        "OpenAI",
+    ],
+    "GOOGL": [
+        "Google",
+        "GOOGL"
+    ],
+    "AMZN": [
+        "Amazon",
+        "AMZN"
+    ],
+    "TSLA": [
+        "Tesla",
+        "TSLA",
+        "Elon Musk"
+    ],
+    "NVDA": [
+        "Nvidia",
+        "CUDA",
+        "NVDA"
+    ]
+}
+download_bluesky_posts(stock_dict, "2025-03-03")

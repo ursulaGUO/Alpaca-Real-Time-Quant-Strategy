@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import sqlite3
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer 
 import pandas as pd
+import time
 
 dotenv_path = os.path.expanduser('~/.secrets/.env')
 load_dotenv(dotenv_path)
@@ -16,6 +17,30 @@ client = Client()
 client.login(emailname, password)
 
 DB_FILE = "data/trade_data.db"
+
+MAX_REQUESTS = 3000  # Maximum requests allowed
+TIME_WINDOW = 300  # 5 minutes (in seconds)
+request_count = 0
+start_time = time.time()
+
+def wait_if_needed():
+    """Enforces the rate limit by delaying requests if approaching the limit."""
+    global request_count, start_time
+
+    elapsed_time = time.time() - start_time
+
+    if request_count >= MAX_REQUESTS:
+        # Wait until 5 minutes have passed
+        sleep_time = TIME_WINDOW - elapsed_time
+        if sleep_time > 0:
+            print(f"Rate limit reached. Sleeping for {sleep_time:.2f} seconds...")
+            time.sleep(sleep_time)
+
+        # Reset request counter and start time after waiting
+        request_count = 0
+        start_time = time.time()
+
+    request_count += 1  # Increment request count for each API call
 
 def initialize_db():
     """Create a new SQLite database file with a posts table."""
@@ -140,12 +165,18 @@ def find_head_or_tail_date_db(file, keyword, tail=True):
 
 from datetime import datetime, timezone, timedelta
 
-def download_bluesky_posts(keyword_dict, since, like_limit=10):
+def download_bluesky_posts(keyword_dict, since, until=None, like_limit=10):
     """Download BlueSky posts for a list of keywords and filter them before saving."""
+
+    if keyword_dict is None or since is None:
+        return
 
     initialize_db()
     default_since = datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    default_until = datetime.now(timezone.utc)  # Fixed end date for forward search
+    if until is None:
+        default_until = datetime.now(timezone.utc)  # Fixed end date for forward search
+    else:
+        default_until = datetime.strptime(until, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     time_step = timedelta(hours=1)  # Move by 1 hour if no posts are found
 
     for symbol, keyword_list in keyword_dict.items():
@@ -166,6 +197,9 @@ def download_bluesky_posts(keyword_dict, since, like_limit=10):
         # Forward search: Fetch newer posts
         while latest_timestamp < default_until:
             print(f"Fetching newer posts from {latest_timestamp} to {default_until}...")
+
+            # Enforce rate limit before search
+            wait_if_needed()
             posts_forward = search_bluesky_posts(client, keyword_list, latest_timestamp, default_until)
 
             if not posts_forward:
@@ -194,6 +228,9 @@ def download_bluesky_posts(keyword_dict, since, like_limit=10):
         # Backward search: Fetch older posts
         while earliest_timestamp > default_since:
             print(f"Fetching older posts from {default_since} to {earliest_timestamp}...")
+
+            # Enforce rate limit before search
+            wait_if_needed()
             posts_backward = search_bluesky_posts(client, keyword_list, default_since, earliest_timestamp)
 
             if not posts_backward:
@@ -293,5 +330,6 @@ new_dict = {
         "NVDA"
     ]
 }
-download_bluesky_posts(stock_dict, "2025-03-03")
-#filter_like(10)
+download_bluesky_posts(stock_dict, since="2025-2-17",until="2025-2-21", like_limit=10)
+
+

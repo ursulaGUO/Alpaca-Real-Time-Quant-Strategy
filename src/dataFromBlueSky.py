@@ -208,6 +208,18 @@ def download_bluesky_posts(keyword_dict, since, until=None, like_limit=10):
         last_fetched_latest = None
         last_fetched_earliest = None
 
+        if latest_timestamp is not None and latest_timestamp.tzinfo is None:
+            latest_timestamp = latest_timestamp.replace(tzinfo=timezone.utc)
+
+        if earliest_timestamp is not None and earliest_timestamp.tzinfo is None:
+            earliest_timestamp = earliest_timestamp.replace(tzinfo=timezone.utc)
+
+        if default_until is not None and default_until.tzinfo is None:
+            default_until = default_until.replace(tzinfo=timezone.utc)
+
+        if default_since is not None and default_since.tzinfo is None:
+            default_since = default_since.replace(tzinfo=timezone.utc)
+
         # Forward search: Fetch newer posts
         while latest_timestamp < default_until:
             print(f"Fetching newer posts from {latest_timestamp} to {default_until}...")
@@ -312,37 +324,3 @@ stock_dict = {
         "Nvidia",
     ]
 }
-
-
-new_dict = {
-    "AAPL": [
-        "Apple",
-        "AAPL",
-        "Tim Cook",
-    ],
-    "MSFT": [
-        "MSFT",
-        "Microsoft",
-        "OpenAI",
-    ],
-    "GOOGL": [
-        "Google",
-        "GOOGL"
-    ],
-    "AMZN": [
-        "Amazon",
-        "AMZN"
-    ],
-    "TSLA": [
-        "Tesla",
-        "TSLA",
-        "Elon Musk"
-    ],
-    "NVDA": [
-        "Nvidia",
-        "CUDA",
-        "NVDA"
-    ]
-}
-
-

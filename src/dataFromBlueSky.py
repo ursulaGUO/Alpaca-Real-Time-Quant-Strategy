@@ -1,4 +1,6 @@
 from atproto import Client, models
+from atproto_client.exceptions import InvokeTimeoutError
+import httpx
 from datetime import datetime, timezone, timedelta
 import argparse
 import os
@@ -68,8 +70,8 @@ def ensure_datetime(value):
         return value.isoformat().replace("+00:00", "Z")
     return value
 
-def search_bluesky_posts(client, keyword_list, since, until, limit=100):
-    """Search for BlueSky posts containing any of the keywords between since and until timestamps."""
+def search_bluesky_posts(client, keyword_list, since, until, limit=100, max_retries=5, timeout=30):
+    """Search for BlueSky posts with retries on timeout errors."""
     since_str = ensure_datetime(since)
     until_str = ensure_datetime(until)
 
@@ -84,13 +86,25 @@ def search_bluesky_posts(client, keyword_list, since, until, limit=100):
         lang="en",
         limit=limit
     )
-    
-    response = client.app.bsky.feed.search_posts(params)
 
-    if not hasattr(response, "posts") or not response.posts:
-        return []
-    
-    return response.posts
+    retries = 0
+    while retries < max_retries:
+        try:
+            response = client.app.bsky.feed.search_posts(params, timeout=timeout)
+
+            if not hasattr(response, "posts") or not response.posts:
+                return []
+
+            return response.posts
+
+        except (InvokeTimeoutError, httpx.ReadTimeout) as e:
+            retries += 1
+            wait_time = 5 * retries  # Exponential backoff: 5s, 10s, 15s...
+            print(f"Timeout error: {e}. Retrying in {wait_time} seconds... (Attempt {retries}/{max_retries})")
+            time.sleep(wait_time)
+
+    print("Max retries reached. Skipping this request.")
+    return []
 
 
 analyzer = SentimentIntensityAnalyzer()
@@ -180,6 +194,9 @@ def parse_datetime(date_str):
             raise ValueError(f"Invalid date format: {date_str}") from e
 
 
+import time
+from datetime import datetime, timezone, timedelta
+
 def download_bluesky_posts(keyword_dict, since, until=None, like_limit=10):
     """Download BlueSky posts for a list of keywords and filter them before saving."""
     
@@ -229,7 +246,7 @@ def download_bluesky_posts(keyword_dict, since, until=None, like_limit=10):
 
             if not posts_forward:
                 print("No posts found in this time chunk. Moving forward.")
-                latest_timestamp += time_step
+                latest_timestamp += time_step  # Move forward by 1 hour
                 continue
 
             # Filter posts
@@ -237,19 +254,20 @@ def download_bluesky_posts(keyword_dict, since, until=None, like_limit=10):
 
             if filtered_posts:
                 save_posts_to_db(filtered_posts, symbol)
-                newest_post_time = parse_datetime(filtered_posts[0].record.created_at)
+                newest_post_time = parse_datetime(filtered_posts[-1].record.created_at)  # Get last post time
 
                 if last_fetched_latest is None:
                     last_fetched_latest = newest_post_time
 
-                if newest_post_time <= last_fetched_latest:
-                    print("Detected same newest post, going further forward.")
+                # Ensure that we're moving forward in time
+                if newest_post_time <= latest_timestamp:
+                    print("Detected same newest post, forcing move forward.")
                     latest_timestamp += time_step
                     continue
 
                 latest_timestamp = newest_post_time
             else:
-                latest_timestamp += time_step
+                latest_timestamp += time_step  # Move forward when no posts meet criteria
 
         # Backward search: Fetch older posts
         while earliest_timestamp > default_since:
@@ -260,7 +278,7 @@ def download_bluesky_posts(keyword_dict, since, until=None, like_limit=10):
 
             if not posts_backward:
                 print("No posts found in this time chunk. Moving backward.")
-                earliest_timestamp -= time_step
+                earliest_timestamp -= time_step  # Move backward by 1 hour
                 continue
 
             # Filter posts
@@ -268,19 +286,20 @@ def download_bluesky_posts(keyword_dict, since, until=None, like_limit=10):
 
             if filtered_posts:
                 save_posts_to_db(filtered_posts, symbol)
-                oldest_post_time = parse_datetime(filtered_posts[-1].record.created_at)
+                oldest_post_time = parse_datetime(filtered_posts[0].record.created_at)  # Get first post time
 
                 if last_fetched_earliest is None:
                     last_fetched_earliest = oldest_post_time
 
-                if oldest_post_time >= last_fetched_earliest:
-                    print("Detected same oldest post, going further back.")
+                # Ensure that we're moving backward in time
+                if oldest_post_time >= earliest_timestamp:
+                    print("Detected same oldest post, forcing move backward.")
                     earliest_timestamp -= time_step
                     continue
 
                 earliest_timestamp = oldest_post_time
             else:
-                earliest_timestamp -= time_step
+                earliest_timestamp -= time_step  # Move backward when no posts meet criteria
 
         print(f"Finished downloading all BlueSky posts for '{symbol}'")
 
@@ -324,3 +343,27 @@ stock_dict = {
         "Nvidia",
     ]
 }
+
+def main():
+    """Fetch historical data once, then update with new posts every 15 minutes."""
+    
+    # Step 1: Download all historical posts from 2025-02-17 to now
+    start_date = "2025-02-17"
+    end_date = datetime.now(timezone.utc).isoformat()  # Current time in UTC
+
+    print(f"Downloading historical posts from {start_date} to {end_date}...")
+    download_bluesky_posts(stock_dict, start_date, end_date)
+
+    # Step 2: Enter a loop to fetch new posts every 15 minutes
+    while True:
+        now = datetime.now(timezone.utc).isoformat()
+        print(f"Fetching latest posts up to {now}...")
+
+        # Fetch new posts up to the current timestamp
+        download_bluesky_posts(stock_dict, start_date=now)
+
+        # Wait 15 minutes before checking again
+        time.sleep(15 * 60)  # 15 minutes
+
+if __name__ == "__main__":
+    main()

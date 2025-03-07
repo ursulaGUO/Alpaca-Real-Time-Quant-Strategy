@@ -2,11 +2,10 @@ import sqlite3
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from dataFromBlueSky import download_bluesky_posts
 import ta
 from queryFromPost import show_table
 
-DB_FILE = "trade_data.db"
+DB_FILE = "data/trade_data.db"
 
 # ---------- Step 1: Compute Technical Indicators ----------
 def compute_technical_indicators(since, until):
@@ -14,10 +13,8 @@ def compute_technical_indicators(since, until):
     conn = sqlite3.connect(DB_FILE)
 
     # Load stock prices
-    query = f"""SELECT * 
-            FROM stock_prices
-            WHERE timestamp BETWEEN {since} AND {until}"""
-    df = pd.read_sql(query, conn, parse_dates=["timestamp"])
+    query = "SELECT * FROM stock_prices WHERE timestamp BETWEEN ? AND ?"
+    df = pd.read_sql(query, conn, params=(since, until), parse_dates=["timestamp"])
     print(df.head())
 
     # Sort data
@@ -42,13 +39,46 @@ def compute_technical_indicators(since, until):
     df.to_sql("stock_features", conn, if_exists="replace", index=False)
     df.to_csv("data/stock_features.csv", index=False)
     conn.close()
+
     print("Technical indicators computed and saved to `stock_features`.")
+
+# ---------- Step 2: Merge with sentiment data ----------
+def merge_sentiment_data(start_date="2025-02-24", end_date="2025-02-28"):
+    """Merge stock and sentiment data directly in SQLite based on nearest timestamp within ±2.5 minutes."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    # Create or replace merged_data table
+    merge_query = f"""
+        CREATE TABLE IF NOT EXISTS merged_data AS
+        SELECT 
+            s.*, 
+            COALESCE(
+                SUM(b.sentiment_score * b.likes) / NULLIF(SUM(b.likes), 0), 
+                0
+            ) AS weighted_sentiment
+        FROM stock_features s
+        LEFT JOIN bluesky_posts b
+            ON b.date BETWEEN datetime(s.timestamp, '-5 minutes') 
+                AND datetime(s.timestamp, '+5 minutes')
+            AND s.symbol = b.keyword
+
+        GROUP BY s.timestamp, s.symbol;
+    """
+
+    cursor.execute("DROP TABLE IF EXISTS merged_data;")  # Clear previous data
+    cursor.execute(merge_query)
+    conn.commit()
+    conn.close()
+    print("Merged dataset saved to `merged_data` in SQLite for ML modeling.")
+
 
 
 since = "2025-02-24"
 until = "2025-02-28"
 print("Computing technical indicators between {since} and {until}")
 compute_technical_indicators(since, until)
-#show_table("stock_features")
+merge_sentiment_data(since, until)
+show_table('merged_data')
 
 

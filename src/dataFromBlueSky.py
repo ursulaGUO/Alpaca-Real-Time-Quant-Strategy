@@ -1,5 +1,5 @@
 from atproto import Client, models
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import argparse
 import os
 from dotenv import load_dotenv
@@ -106,6 +106,7 @@ def save_posts_to_db(posts, keyword):
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
 
+            posts = sorted(posts, key=lambda post: post.record.created_at)
             for post in posts:
                 try:
                     sscore = get_sentiment_score(post.record.text)
@@ -162,21 +163,35 @@ def find_head_or_tail_date_db(file, keyword, tail=True):
     return None if result is None else datetime.fromisoformat(result[0].replace("Z", "+00:00"))
 
 
+def parse_datetime(date_str):
+    """Safely parse date strings in either '%Y-%m-%d' or ISO format."""
+    if isinstance(date_str, datetime):
+        # If the input is already a datetime object, return it directly
+        return date_str.replace(tzinfo=timezone.utc)
+    
+    try:
+        # Try parsing '%Y-%m-%d' format
+        return datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        try:
+            # Try parsing ISO format (YYYY-MM-DDTHH:MM:SS.SSSZ)
+            return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        except ValueError as e:
+            raise ValueError(f"Invalid date format: {date_str}") from e
 
-from datetime import datetime, timezone, timedelta
 
 def download_bluesky_posts(keyword_dict, since, until=None, like_limit=10):
     """Download BlueSky posts for a list of keywords and filter them before saving."""
-
+    
     if keyword_dict is None or since is None:
         return
 
     initialize_db()
-    default_since = datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    if until is None:
-        default_until = datetime.now(timezone.utc)  # Fixed end date for forward search
-    else:
-        default_until = datetime.strptime(until, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    
+    # Use the time parsing function
+    default_since = parse_datetime(since)
+    default_until = parse_datetime(until) if until else datetime.now(timezone.utc)  # Fixed end date for forward search
+    
     time_step = timedelta(hours=1)  # Move by 1 hour if no posts are found
 
     for symbol, keyword_list in keyword_dict.items():
@@ -187,10 +202,9 @@ def download_bluesky_posts(keyword_dict, since, until=None, like_limit=10):
         earliest_timestamp = find_head_or_tail_date_db(DB_FILE, symbol, tail=False)
 
         # Set default values if no previous data exists
-        latest_timestamp = latest_timestamp or default_since
-        earliest_timestamp = earliest_timestamp or default_until
+        latest_timestamp = parse_datetime(latest_timestamp) if latest_timestamp else default_since
+        earliest_timestamp = parse_datetime(earliest_timestamp) if earliest_timestamp else default_until
 
-        # Track last fetched timestamps to detect repeated fetches
         last_fetched_latest = None
         last_fetched_earliest = None
 
@@ -198,63 +212,63 @@ def download_bluesky_posts(keyword_dict, since, until=None, like_limit=10):
         while latest_timestamp < default_until:
             print(f"Fetching newer posts from {latest_timestamp} to {default_until}...")
 
-            # Enforce rate limit before search
             wait_if_needed()
             posts_forward = search_bluesky_posts(client, keyword_list, latest_timestamp, default_until)
 
             if not posts_forward:
                 print("No posts found in this time chunk. Moving forward.")
-                latest_timestamp += time_step  # Move forward even if no posts are found
+                latest_timestamp += time_step
                 continue
 
-            # Filter posts based on like count before saving
+            # Filter posts
             filtered_posts = [post for post in posts_forward if post.like_count >= like_limit]
 
             if filtered_posts:
                 save_posts_to_db(filtered_posts, symbol)
-                newest_post_time = datetime.fromisoformat(filtered_posts[0].record.created_at.replace("Z", "+00:00"))
+                newest_post_time = parse_datetime(filtered_posts[0].record.created_at)
 
-                # Check if the newest post is the same as last fetched
-                if newest_post_time == last_fetched_latest:
-                    print("Detected same newest post, stopping forward search.")
-                    break
+                if last_fetched_latest is None:
+                    last_fetched_latest = newest_post_time
 
-                last_fetched_latest = newest_post_time
+                if newest_post_time <= last_fetched_latest:
+                    print("Detected same newest post, going further forward.")
+                    latest_timestamp += time_step
+                    continue
+
                 latest_timestamp = newest_post_time
             else:
-                print(f"Skipping saving for '{symbol}' as no posts met the like threshold.")
-                latest_timestamp += time_step  # Move forward if no posts met criteria
+                latest_timestamp += time_step
 
         # Backward search: Fetch older posts
         while earliest_timestamp > default_since:
             print(f"Fetching older posts from {default_since} to {earliest_timestamp}...")
 
-            # Enforce rate limit before search
             wait_if_needed()
             posts_backward = search_bluesky_posts(client, keyword_list, default_since, earliest_timestamp)
 
             if not posts_backward:
                 print("No posts found in this time chunk. Moving backward.")
-                earliest_timestamp -= time_step  # Move backward even if no posts are found
+                earliest_timestamp -= time_step
                 continue
 
-            # Filter posts based on like count before saving
+            # Filter posts
             filtered_posts = [post for post in posts_backward if post.like_count >= like_limit]
 
             if filtered_posts:
                 save_posts_to_db(filtered_posts, symbol)
-                oldest_post_time = datetime.fromisoformat(filtered_posts[-1].record.created_at.replace("Z", "+00:00"))
+                oldest_post_time = parse_datetime(filtered_posts[-1].record.created_at)
 
-                # Check if the oldest post is the same as last fetched
-                if oldest_post_time == last_fetched_earliest:
-                    print("Detected same oldest post, stopping backward search.")
-                    break
+                if last_fetched_earliest is None:
+                    last_fetched_earliest = oldest_post_time
 
-                last_fetched_earliest = oldest_post_time
+                if oldest_post_time >= last_fetched_earliest:
+                    print("Detected same oldest post, going further back.")
+                    earliest_timestamp -= time_step
+                    continue
+
                 earliest_timestamp = oldest_post_time
             else:
-                print(f"Skipping saving for '{symbol}' as no posts met the like threshold.")
-                earliest_timestamp -= time_step  # Move backward if no posts met criteria
+                earliest_timestamp -= time_step
 
         print(f"Finished downloading all BlueSky posts for '{symbol}'")
 
@@ -330,6 +344,5 @@ new_dict = {
         "NVDA"
     ]
 }
-download_bluesky_posts(stock_dict, since="2025-2-17",until="2025-2-21", like_limit=10)
 
 

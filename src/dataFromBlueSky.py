@@ -239,13 +239,13 @@ def download_bluesky_posts(keyword_dict, since, until=None, like_limit=10):
 
         # Forward search: Fetch newer posts
         while latest_timestamp < default_until:
-            print(f"Fetching newer posts from {latest_timestamp} to {default_until}...")
+            print(f"Fetching {symbol} newer posts from {latest_timestamp} to {default_until}...")
 
             wait_if_needed()
             posts_forward = search_bluesky_posts(client, keyword_list, latest_timestamp, default_until)
 
             if not posts_forward:
-                print("No posts found in this time chunk. Moving forward.")
+                print(f"No {symbol} posts found in this time chunk. Moving forward.")
                 latest_timestamp += time_step  # Move forward by 1 hour
                 continue
 
@@ -261,7 +261,7 @@ def download_bluesky_posts(keyword_dict, since, until=None, like_limit=10):
 
                 # Ensure that we're moving forward in time
                 if newest_post_time <= latest_timestamp:
-                    print("Detected same newest post, forcing move forward.")
+                    print(f"Detected same {symbol} newest post, forcing move forward.")
                     latest_timestamp += time_step
                     continue
 
@@ -271,13 +271,13 @@ def download_bluesky_posts(keyword_dict, since, until=None, like_limit=10):
 
         # Backward search: Fetch older posts
         while earliest_timestamp > default_since:
-            print(f"Fetching older posts from {default_since} to {earliest_timestamp}...")
+            print(f"Fetching {symbol} older posts from {default_since} to {earliest_timestamp}...")
 
             wait_if_needed()
             posts_backward = search_bluesky_posts(client, keyword_list, default_since, earliest_timestamp)
 
             if not posts_backward:
-                print("No posts found in this time chunk. Moving backward.")
+                print(f"No {symbol} posts found in this time chunk. Moving backward.")
                 earliest_timestamp -= time_step  # Move backward by 1 hour
                 continue
 
@@ -293,7 +293,7 @@ def download_bluesky_posts(keyword_dict, since, until=None, like_limit=10):
 
                 # Ensure that we're moving backward in time
                 if oldest_post_time >= earliest_timestamp:
-                    print("Detected same oldest post, forcing move backward.")
+                    print(f"Detected {symbol} same oldest post, forcing move backward.")
                     earliest_timestamp -= time_step
                     continue
 
@@ -360,9 +360,10 @@ def main():
         print(f"Fetching latest posts up to {now}...")
 
         # Fetch new posts up to the current timestamp
-        download_bluesky_posts(stock_dict, start_date=now)
+        download_bluesky_posts(stock_dict, end_date, now)
 
         # Wait 15 minutes before checking again
+        print("Sleeping 15 minutes")
         time.sleep(15 * 60)  # 15 minutes
 
 if __name__ == "__main__":

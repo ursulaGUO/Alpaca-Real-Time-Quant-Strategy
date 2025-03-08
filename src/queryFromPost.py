@@ -58,45 +58,68 @@ def delete_post(table, ticker: str = None, since: str = None, until: str = None)
     
     if ticker:
         if since and until:
-            query = f"DELETE FROM {table} WHERE keyword = ? AND date BETWEEN ? AND ?"
+            query = f"DELETE FROM {table} WHERE keyword = ? AND DATE(date) BETWEEN DATE(?) AND DATE(?)"
             params = (ticker, since, until)
         elif since:
-            query = f"DELETE FROM {table} WHERE keyword = ? AND date >= ?"
+            query = f"DELETE FROM {table} WHERE keyword = ? AND DATE(date) >= DATE(?)"
             params = (ticker, since)
         elif until:
-            query = f"DELETE FROM {table} WHERE keyword = ? AND date <= ?"
+            query = f"DELETE FROM {table} WHERE keyword = ? AND DATE(date) <= DATE(?)"
             params = (ticker, until)
         else:
             query = f"DELETE FROM {table} WHERE keyword = ?"
             params = (ticker,)
     else:
-        query = f"DELETE FROM {table}"
-        params = ()
-    
+        if since and until:
+            query = f"DELETE FROM {table} WHERE DATE(date) BETWEEN DATE(?) AND DATE(?)"
+            params = (since, until)
+        else:
+            query = f"DELETE FROM {table}"
+            params = ()
+
     cursor.execute(query, params)
     conn.commit()
     conn.close()
+    print(f"Deleted from {table} all posts between {since} and {until}.")
 
-def show_table(table):
+def show_table(table, since=None, until=None):
     """
-    Shows the contents of the table in the database.
+    Shows the contents of the table in the database and saves it as a CSV file.
     """
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute(f"SELECT * FROM {table}")
+    
+    # Fetch column names
+    cursor.execute(f"PRAGMA table_info({table})")
+    columns = [col[1] for col in cursor.fetchall()]  # Extract column names
+    
+    # Fetch data
+    if since is None or until is None:
+        cursor.execute(f"SELECT * FROM {table}")
+    else:
+        cursor.execute(f"SELECT * FROM {table} WHERE timestamp BETWEEN ? AND ?", (since, until))
+    
     results = cursor.fetchall()
     conn.close()
     
-    df = pd.DataFrame(results)
-    df.to_csv(f"data/{table}.csv", index=False)
-    print(f"df saved to data/{table}.csv")
+    # Create DataFrame with column names
+    df = pd.DataFrame(results, columns=columns)
+    
+    # Save DataFrame to CSV with column names
+    if since is None or until is None:
+        filename = f"data/{table}.csv"
+    else:
+        filename = f"data/{table}_{since}_{until}.csv"
+    
+    df.to_csv(filename, index=False)
+    print(f"df saved to {filename}")
 
 def parse_arguments():
     """
     Parses command-line arguments for querying or deleting posts.
     """
     parser = argparse.ArgumentParser(description="Query posts from data/trade_data.db")
-    parser.add_argument("-table", type=str, default="bluesky_posts", choices = ['bluesky_posts','stock_prices'],help="The name of the table in the database")
+    parser.add_argument("-table", type=str, default="bluesky_posts", choices = ['bluesky_posts','stock_prices','stock_features','merged_data'],help="The name of the table in the database")
     parser.add_argument("-ticker", type=str, help="The ticker of the stock")
     parser.add_argument("-since", type=str, help="The start date (YYYY-MM-DD)")
     parser.add_argument("-until", type=str, help="The end date (YYYY-MM-DD)")
@@ -113,7 +136,7 @@ if __name__ == "__main__":
         if ticker:
             print(f"Deleted posts for {ticker} from {since} to {until}.")
         else:
-            print(f"Deleted all posts between {since} and {until}.")
+            print(f"Deleted table {table} all posts between {since} and {until}.")
     
     elif query == "search":
         if not ticker:
@@ -128,7 +151,7 @@ if __name__ == "__main__":
             print(f"Number of posts: {stock_df.shape[0]}")
             print(f"Date range: {stock_df['date'].min()} to {stock_df['date'].max()}")
     elif query == "show_table":
-        show_table(table)
+        show_table(table, since, until)
     elif query == "find_unique_stocks":
         stock_df = find_unique_stocks(table, since, until)
         

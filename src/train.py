@@ -50,7 +50,7 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_
 scaler = StandardScaler()
 X_train = scaler.fit_transform(X_train)
 X_test = scaler.transform(X_test)
-SCALER_FILE = "model/scaler.pkl"
+SCALER_FILE = "model/RF_scaler.pkl"
 with open(SCALER_FILE, "wb") as f:
     pickle.dump(scaler, f)
 

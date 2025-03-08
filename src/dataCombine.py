@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import ta
 from queryFromPost import show_table
 from dataFromBlueSky import download_bluesky_posts
+import pytz
 
 DB_FILE = "data/trade_data.db"
 
@@ -99,7 +100,15 @@ def merge_sentiment_data(start_date="2025-02-17", end_date="2025-02-21"):
     if last_merged_timestamp is None or last_merged_timestamp < start_date:
         last_merged_timestamp = start_date
 
-    # Merge only new stock and sentiment data
+
+
+
+def merge_sentiment_data(start_date="2025-02-17", end_date="2025-02-21"):
+    """Merge stock and sentiment data."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    # Convert `b.date` from UTC to CST before merging
     merge_query = f"""
         INSERT INTO merged_data
         SELECT 
@@ -144,8 +153,8 @@ stock_dict = {
 }
 
 
-since = "2025-02-17"
-until = "2025-02-21"
+since = "2025-02-27"
+until = "2025-03-08"
 print("Computing technical indicators between {since} and {until}")
 compute_technical_indicators(since, until)
 merge_sentiment_data(since, until)

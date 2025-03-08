@@ -33,82 +33,38 @@ def predict_next_open(features):
     return model.predict(features_scaled)[0]
 
 def execute_trade(symbol, open_price, predicted_next_open):
-    """Executes buy and short-sell orders while respecting buying power."""
+    """Executes buy and sell orders based on strategy rules."""
     global cash, buying_power, positions
 
-    # Long Entry (BUY)
+    # Buy if prediction is at least 0.1 higher than current open
     if predicted_next_open >= open_price + 0.1:
-        max_spend = min(max(3000, cash / open_price), buying_power)  # Respect buying power
+        max_spend = min(max(3000, cash / open_price), buying_power)  # Limit to available buying power
         quantity = int(max_spend / open_price)  # Number of shares to buy
 
         if quantity > 0 and cash >= quantity * open_price:
             cash -= quantity * open_price
-            buying_power -= quantity * open_price  # Reduce buying power
-            if symbol in positions and positions[symbol]["side"] == "long":
+            buying_power -= quantity * open_price  # Reduce available capital
+            if symbol in positions:
                 existing_quantity = positions[symbol]["quantity"]
                 avg_price = positions[symbol]["avg_price"]
                 new_quantity = existing_quantity + quantity
                 new_price = ((existing_quantity * avg_price) + (quantity * open_price)) / new_quantity
-                positions[symbol] = {"side": "long", "quantity": new_quantity, "avg_price": new_price}
+                positions[symbol] = {"quantity": new_quantity, "avg_price": new_price}
             else:
-                positions[symbol] = {"side": "long", "quantity": quantity, "avg_price": open_price}
+                positions[symbol] = {"quantity": quantity, "avg_price": open_price}
 
-            print(f"BUY {quantity} shares of {symbol} at {open_price:.2f}, Predicted: {predicted_next_open:.2f}, Cash: {cash:.2f}, Buying Power: {buying_power:.2f}")
+            print(f"💰 BUY {quantity} shares of {symbol} at {open_price:.2f}, Predicted: {predicted_next_open:.2f}, Cash: {cash:.2f}, Buying Power: {buying_power:.2f}")
 
-    # Short Entry (SELL SHORT)
-    elif predicted_next_open <= open_price - 0.1:
-        max_shares = min(max(3000, cash / open_price), buying_power / open_price)  # Limit shorting to available margin
-        quantity = int(max_shares / open_price)  # Number of shares to short
+    # Sell if prediction is lower than the current open and we hold this stock
+    elif predicted_next_open < open_price and symbol in positions:
+        quantity = positions[symbol]["quantity"]
+        avg_price = positions[symbol]["avg_price"]
 
-        if quantity > 0:
-            cash += quantity * open_price  # Receive cash from short sale
-            buying_power -= quantity * open_price  # Reduce buying power for shorting
-            if symbol in positions and positions[symbol]["side"] == "short":
-                existing_quantity = positions[symbol]["quantity"]
-                avg_price = positions[symbol]["avg_price"]
-                new_quantity = existing_quantity + quantity
-                new_price = ((existing_quantity * avg_price) + (quantity * open_price)) / new_quantity
-                positions[symbol] = {"side": "short", "quantity": new_quantity, "avg_price": new_price}
-            else:
-                positions[symbol] = {"side": "short", "quantity": quantity, "avg_price": open_price}
+        cash += quantity * open_price  
+        buying_power += quantity * open_price 
+        del positions[symbol]  
 
-            print(f"📉 SHORT {quantity} shares of {symbol} at {open_price:.2f}, Predicted: {predicted_next_open:.2f}, Cash: {cash:.2f}, Buying Power: {buying_power:.2f}")
-
-    # Stop-Loss & Take-Profit Handling
-    if symbol in positions:
-        position = positions[symbol]
-        quantity, avg_price, side = position["quantity"], position["avg_price"], position["side"]
-
-        # Stop-Loss for LONG positions (SELL if price drops 2% below buy price)
-        if side == "long" and open_price <= avg_price * 0.98:
-            cash += quantity * open_price
-            buying_power += quantity * open_price  # Restore buying power
-            del positions[symbol]
-            print(f"STOP-LOSS SELL {quantity} shares of {symbol} at {open_price:.2f}, Avg Buy: {avg_price:.2f}, Cash: {cash:.2f}, Buying Power: {buying_power:.2f}")
-
-        # Stop-Loss for SHORT positions (COVER if price rises 2% above short price)
-        elif side == "short" and open_price >= avg_price * 1.02:
-            cash -= quantity * open_price  # Buy back shares
-            buying_power += quantity * open_price  # Restore buying power
-            del positions[symbol]
-            print(f"STOP-LOSS COVER {quantity} shares of {symbol} at {open_price:.2f}, Avg Short: {avg_price:.2f}, Cash: {cash:.2f}, Buying Power: {buying_power:.2f}")
-
-    # Stop-Loss & Take-Profit Handling
-    if symbol in positions:
-        position = positions[symbol]
-        quantity, avg_price, side = position["quantity"], position["avg_price"], position["side"]
-
-        # Stop-Loss for LONG positions (SELL if price drops 2% below buy price)
-        if side == "long" and open_price <= avg_price * 0.98:
-            cash += quantity * open_price
-            del positions[symbol]
-            print(f"STOP-LOSS SELL {quantity} shares of {symbol} at {open_price:.2f}, Avg Buy: {avg_price:.2f}, Cash: {cash:.2f}")
-
-        # Stop-Loss for SHORT positions (COVER if price rises 2% above short price)
-        elif side == "short" and open_price >= avg_price * 1.02:
-            cash -= quantity * open_price  # Buy back shares
-            del positions[symbol]
-            print(f"STOP-LOSS COVER {quantity} shares of {symbol} at {open_price:.2f}, Avg Short: {avg_price:.2f}, Cash: {cash:.2f}")
+        print(f" SELL {quantity} shares of {symbol} at {open_price:.2f}, Predicted: {predicted_next_open:.2f}, Cash: {cash:.2f}, Buying Power: {buying_power:.2f}")
 
 latest_prices = {}  
 
@@ -116,15 +72,12 @@ def calculate_portfolio_value():
     """Calculates the total portfolio value using the latest market prices."""
     portfolio_value = cash
     for symbol, position in positions.items():
-        quantity, avg_price, side = position["quantity"], position["avg_price"], position["side"]
+        quantity, avg_price = position["quantity"], position["avg_price"]
         market_price = latest_prices.get(symbol, avg_price)  # Use latest market price if available
-
-        if side == "long":
-            portfolio_value += quantity * market_price  # Long position adds value
-        elif side == "short":
-            portfolio_value -= quantity * (market_price - avg_price)  # Short position profit/loss
+        portfolio_value += quantity * market_price  # Only handle long positions
 
     return portfolio_value
+
 
 try:
     while True:
@@ -138,7 +91,7 @@ try:
         open_price = float(market_data["open"])
 
         # Store the latest market price
-        latest_prices[symbol] = open_price  # Use the latest open price as market value
+        latest_prices[symbol] = open_price 
 
         # Extract features for prediction
         feature_values = np.array([
@@ -161,22 +114,18 @@ try:
         pnl = portfolio_value - INITIAL_CASH
 
         # Print Summary
-        print("\n📊 Market Update:")
-        print(f"🔹 Symbol: {symbol}")
-        print(f"🔹 Open Price: {open_price:.2f}")
-        print(f"🔹 Predicted Next Open: {predicted_next_open:.2f}")
-        print(f"💵 Cash Balance: {cash:.2f}")
-        print(f"📈 Portfolio Value: {portfolio_value:.2f}")
-        print(f"📊 Current Holdings:")
-
+        print("\nMarket Update:")
+        print(f" Symbol: {symbol}")
+        print(f" Open Price: {open_price:.2f}")
+        print(f" Predicted Next Open: {predicted_next_open:.2f}")
+        print(f" Cash Balance: {cash:.2f}")
+        print(f" Portfolio Value: {portfolio_value:.2f}")
+        print(f"\n Current Holdings:")
         for sym, position in positions.items():
-            quantity, avg_price, side = position["quantity"], position["avg_price"], position["side"]
+            quantity, avg_price = position["quantity"], position["avg_price"]
             market_price = latest_prices.get(sym, avg_price)
-            position_type = "LONG" if side == "long" else "SHORT"
-            print(f"  - {sym}: {quantity} shares ({position_type}) @ {market_price:.2f} (Avg {side.title()}: {avg_price:.2f})")
+            print(f"  - {sym}: {quantity} shares @ {market_price:.2f} (Avg Buy: {avg_price:.2f})")
 
-        print(f"📉 Profit & Loss (PnL): {'+' if pnl >= 0 else '-'}{abs(pnl):.2f}")
-        print("-" * 50)
 
 except KeyboardInterrupt:
     print("\nBacktest stopped by user.")
@@ -188,12 +137,12 @@ finally:
     final_pnl = final_value - INITIAL_CASH
 
     for symbol, position in positions.items():
-        quantity, avg_price, side = position["quantity"], position["avg_price"], position["side"]
+        quantity, avg_price = position["quantity"], position["avg_price"]
         market_price = latest_prices.get(symbol, avg_price)
-        position_type = "LONG" if side == "long" else "SHORT"
-        print(f"{symbol}: {quantity} shares ({position_type}) @ {market_price:.2f} (Avg {side.title()}: {avg_price:.2f})")
+        print(f"{symbol}: {quantity} shares @ {market_price:.2f} (Avg Buy: {avg_price:.2f})")
 
     print(f"\n💰 Final Cash: {cash:.2f}")
     print(f"📈 Total Portfolio Value: {final_value:.2f} (Initial: {INITIAL_CASH:.2f})")
     print(f"📉 Final Profit & Loss (PnL): {'+' if final_pnl >= 0 else '-'}{abs(final_pnl):.2f}")
     print("\n🔚 Backtest Complete.")
+

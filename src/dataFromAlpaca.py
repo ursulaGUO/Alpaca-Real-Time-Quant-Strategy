@@ -3,6 +3,8 @@ import pandas as pd
 import alpaca_trade_api as tradeapi
 from datetime import datetime, timezone, timedelta
 import pandas_market_calendars as mcal
+from dataCombine import merge_sentiment_data, compute_technical_indicators
+from queryFromPost import delete_post
 import pytz
 import json
 import websockets
@@ -92,14 +94,64 @@ def save_to_db(conn, df):
               row["volume"]))
     conn.commit()
 
+
+
+# Initialize Alpaca API
+api = tradeapi.REST(config.ALPACA_API_KEY, config.ALPACA_API_SECRET, config.ALPACA_BASE_URL, api_version="v2")
+
 ### =========================
-###   FETCH DATA FROM ALPACA
+###   DATABASE FUNCTIONS
+### =========================
+
+def create_connection():
+    """Create a database connection."""
+    return sqlite3.connect(config.DB_FILE)
+
+def create_table():
+    """Create the stock_prices table if it does not exist."""
+    with sqlite3.connect(config.DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS stock_prices (
+                symbol TEXT,
+                timestamp TEXT,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                volume INTEGER,
+                PRIMARY KEY (symbol, timestamp)
+            )
+        """)
+        conn.commit()
+
+
+# dataFromAlpaca.py
+async def save_stock_data(symbol, timestamp, open_price, high, low, close, volume):
+    """Save real-time stock data to SQLite database."""
+    with sqlite3.connect(config.DB_FILE) as conn:
+        cursor = conn.cursor()
+
+        # Convert timestamp to UTC
+        dt_object = datetime.fromisoformat(timestamp.replace('Z', '+00:00')) # Convert it to a datatime
+        timestamp_utc = dt_object.strftime("%Y-%m-%d %H:%M:%S")  # Format as string
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO stock_prices (symbol, timestamp, open, high, low, close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (symbol, timestamp_utc, open_price, high, low, close, volume))
+
+        conn.commit()
+        print(f"✅ [SAVED] {symbol} | {timestamp} | Open: {open_price}")
+
+### =========================
+###   HISTORICAL DATA FETCH
 ### =========================
 
 def fetch_historical_data():
     """Fetch historical data in chunks and update SQLite database."""
     conn = create_connection()
-    create_table(conn)
+    create_table()
 
     now = datetime.now(timezone.utc) - timedelta(minutes=15)  # Ensure 15-minute delay
     market_close_time = get_market_close_time()
@@ -114,11 +166,11 @@ def fetch_historical_data():
 
         while last_timestamp_dt < now:
             if market_close_time and last_timestamp_dt >= market_close_time:
-                print(f"[{symbol}] Market closed. Stopping historical fetch.")
+                print(f"⏳ [{symbol}] Market closed. Stopping historical fetch.")
                 break
 
             if last_timestamp_dt.weekday() >= 5:  # Skip weekends
-                print(f"[{symbol}] Weekend detected. Skipping fetch.")
+                print(f"📅 [{symbol}] Weekend detected. Skipping fetch.")
                 break
 
             until_time = (last_timestamp_dt + timedelta(days=config.HISTORICAL_CHUNK_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -143,47 +195,77 @@ def fetch_historical_data():
                 break
 
     conn.close()
-    print("Historical data fetch complete.")
+    print(" Historical data fetch complete.")
 
+### =========================
+###   REAL-TIME DATA FETCH
+### =========================
 
 ALPACA_WS_URL = "wss://stream.data.alpaca.markets/v2/iex"  # Using IEX instead of SIP
 
-# List of stock symbols to track
-SYMBOLS = list(config.STOCK_DICT.keys())
+def get_latest_timestamp():
+    """Get the latest timestamp from stock_prices, ensuring it does not go after 2024-10-01."""
+    with sqlite3.connect(config.DB_FILE) as conn:
+        query = "SELECT MAX(timestamp) FROM stock_prices"
+        latest_time = pd.read_sql(query, conn).iloc[0, 0]
 
-# SQLite database file
-DB_FILE = config.DB_FILE
+    fixed_start_date = "2024-10-01 00:00:00"  # Set a fixed start date
 
-async def save_stock_data(symbol, timestamp, open_price, high, low, close, volume):
-    """Save stock data to SQLite database."""
-    with sqlite3.connect(DB_FILE) as conn:
+    if latest_time:
+        return min(latest_time, fixed_start_date)  # Ensure it doesn't go fater 2024-10-01
+    else:
+        return fixed_start_date  # If no data exists, use the fixed date
+
+
+# dataFromAlpaca.py
+def run_data_processing():
+    """Step 3: Merge stock data with sentiment data and compute technical indicators."""
+    print("\n[Step 3] Merging stock & sentiment data and computing indicators...")
+
+    # Fetch the latest timestamp from stock_features
+    start_date = get_latest_feature_timestamp()  # Use the new function to get the latest time
+    if not start_date:
+        start_date = "2024-10-01 00:00:00" # Default to your initial start date
+
+    end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        print(f"Computing technical indicators from {start_date} to {end_date}...")
+        print(f"Start date {start_date}, end date {end_date}")
+        compute_technical_indicators(start_date, end_date)
+        print("[Step 3] Technical indicators computed successfully.")
+    except Exception as e:
+        print(f"[ERROR] Failed to compute technical indicators: {e}")
+        raise
+
+    try:
+        print(f"Merging sentiment data from {start_date} to {end_date}...")
+        merge_sentiment_data(start_date, end_date)
+        print("[Step 3] Merging stock and sentiment data completed successfully.")
+    except Exception as e:
+        print(f"[ERROR] Failed to merge sentiment data: {e}")
+        raise
+
+
+# dataFromAlpaca.py
+def get_latest_feature_timestamp():
+    """Helper function to get the latest timestamp from stock_features."""
+    try:
+        conn = create_connection()
         cursor = conn.cursor()
+        cursor.execute("SELECT MAX(timestamp) FROM stock_features")
+        latest_timestamp = cursor.fetchone()[0]
+        conn.close()
 
-        # Ensure stock_data table exists
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS stock_data (
-                symbol TEXT,
-                timestamp TEXT,
-                open REAL,
-                high REAL,
-                low REAL,
-                close REAL,
-                volume INTEGER,
-                PRIMARY KEY (symbol, timestamp)
-            )
-        """)
+        print(f"[DEBUG] get_latest_feature_timestamp() returned: {latest_timestamp}") # Added line
 
-        # Insert or update stock price data
-        cursor.execute("""
-            INSERT OR REPLACE INTO stock_data (symbol, timestamp, open, high, low, close, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (symbol, timestamp, open_price, high, low, close, volume))
-
-        conn.commit()
-        print(f"[Alpaca-IEX] Saved {symbol} data at {timestamp}.")
+        return latest_timestamp
+    except Exception as e:
+        print(f"[ERROR] Could not retrieve latest timestamp from stock_features: {e}")
+        return None
 
 async def alpaca_ws_handler():
-    """Connects to Alpaca WebSocket API and listens for IEX stock data."""
+    """Connects to Alpaca WebSocket API and listens for real-time stock data, then triggers data processing."""
     async with websockets.connect(ALPACA_WS_URL) as ws:
         # Authenticate
         auth_msg = json.dumps({
@@ -193,15 +275,16 @@ async def alpaca_ws_handler():
         })
         await ws.send(auth_msg)
         auth_response = await ws.recv()
-        print(f"[Alpaca-IEX] Auth Response: {auth_response}")
+        print(f"🔑 [Alpaca-IEX] Authenticated: {auth_response}")
 
-        # Subscribe to IEX market data
+        # Subscribe to stock market data
         subscribe_msg = json.dumps({
             "action": "subscribe",
-            "bars": SYMBOLS  # Subscribe to real-time bar updates
+            "bars": config.ALL_SYMBOLS
         })
         await ws.send(subscribe_msg)
-        print(f"[Alpaca-IEX] Subscribed to: {SYMBOLS}")
+        subscribe_response = await ws.recv()
+        print(f" [Subscribed] {subscribe_response}")
 
         while True:
             try:
@@ -209,33 +292,29 @@ async def alpaca_ws_handler():
                 data = json.loads(message)
 
                 for stock in data:
-                    if stock.get("T") == "bar":  # Only process bar data
+                    if stock.get("T") == "b":  # Only process bar data
                         symbol = stock["S"]
-                        timestamp = datetime.utcfromtimestamp(stock["t"] / 1000).isoformat()
+                        timestamp = stock["t"]  # ISO timestamp
                         open_price = stock["o"]
                         high = stock["h"]
                         low = stock["l"]
                         close = stock["c"]
                         volume = stock["v"]
 
+                        print(f"\n[LIVE] {symbol} - {timestamp} | Open: {open_price}, High: {high}, Low: {low}, Close: {close}, Volume: {volume}")
+
+                        # Save the real-time data
                         await save_stock_data(symbol, timestamp, open_price, high, low, close, volume)
 
+                # ✅ **Trigger data processing right after new data is stored**
+                print("\n[INFO] Running data processing after new real-time data...")
+                run_data_processing()
+
             except Exception as e:
-                print(f"[Alpaca-IEX] Error: {e}")
-                await asyncio.sleep(5)  # Small delay before retrying
+                print(f"[Alpaca-IEX] WebSocket Error: {e}")
+                await asyncio.sleep(5)  # Retry after small delay
+
 
 async def fetch_realtime_data():
     """Runs Alpaca WebSocket handler asynchronously."""
     await alpaca_ws_handler()
-
-### =========================
-###   MAIN EXECUTION
-### =========================
-
-if __name__ == "__main__":
-    print("Running Alpaca Data Fetching...")
-    
-    fetch_historical_data()  # Step 1: Fetch historical data
-    fetch_realtime_data()    # Step 2: Fetch latest real-time data
-    
-    print("Data fetching complete.")

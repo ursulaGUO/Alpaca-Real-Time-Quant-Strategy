@@ -1,3 +1,5 @@
+# dataFromBlueSky.py
+import asyncio
 import sqlite3
 import httpx
 import time
@@ -100,7 +102,7 @@ def wait_if_needed():
 
     request_count += 1  
 
-def search_bluesky_posts(keyword_list, since, until, limit=100, max_retries=5, timeout=30):
+async def search_bluesky_posts(keyword_list, since, until, limit=100, max_retries=5, timeout=60):
     """Fetch posts from BlueSky API with retries on timeout errors."""
     since_str = since.isoformat().replace("+00:00", "Z")
     until_str = until.isoformat().replace("+00:00", "Z")
@@ -113,44 +115,55 @@ def search_bluesky_posts(keyword_list, since, until, limit=100, max_retries=5, t
     retries = 0
     while retries < max_retries:
         try:
-            response = client.app.bsky.feed.search_posts(params, timeout=timeout)
-            return response.posts if hasattr(response, "posts") else []
+            try:
+              response = client.app.bsky.feed.search_posts(params, timeout=timeout)
+              # Attempt to access the status code (this might vary based on the exact library version)
+              status_code = client.app.bsky.feed.search_posts.http.last_response.status
+            except AttributeError:
+              status_code = 200 #If cannot access status code assume success
+            if status_code == 200:
+                return response.posts if hasattr(response, "posts") else []
+            elif status_code == 429:
+                print("Rate limit exceeded.  Waiting and retrying...")
+                await asyncio.sleep(60 * retries)  # Wait longer with each retry
+            else:
+                print(f"HTTP Error: {status_code}. Retrying...")
+
         except (InvokeTimeoutError, httpx.ReadTimeout) as e:
             retries += 1
-            wait_time = 5 * retries  # Exponential backoff
+            wait_time = 10 * retries  # More aggressive exponential backoff
             print(f"Timeout error: {e}. Retrying in {wait_time} seconds... (Attempt {retries}/{max_retries})")
-            time.sleep(wait_time)
+            await asyncio.sleep(wait_time)
+        except Exception as e: # Catch other exceptions
+            retries += 1
+            wait_time = 10 * retries
+            print(f"General error: {e}. Retrying in {wait_time} seconds... (Attempt {retries}/{max_retries})")
+            await asyncio.sleep(wait_time)
 
-    print("Max retries reached. Skipping this request.")
-    return []
+        print("Max retries reached. Skipping this request.")
+        return []
 
-### =========================
-###   MAIN FUNCTION
-### =========================
-
-def download_bluesky_posts():
-    """Download BlueSky posts for configured stock keywords."""
-    initialize_db()
+async def fetch_and_save_posts(symbol, keywords):
+    """Fetch posts for a single symbol and save them to the database."""
+    last_scraped = get_last_scraped_timestamp(symbol)
+    start_time = datetime.strptime(config.SENTIMENT_START_DATE, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) if not last_scraped else datetime.fromisoformat(last_scraped.replace("Z", "+00:00"))
     now = datetime.now(timezone.utc)
-    
-    for symbol, keywords in config.STOCK_DICT.items():
-        last_scraped = get_last_scraped_timestamp(symbol)
-        start_time = datetime.strptime(config.SENTIMENT_START_DATE, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) if not last_scraped else datetime.fromisoformat(last_scraped.replace("Z", "+00:00"))
-        
-        print(f"Fetching BlueSky posts for {symbol} from {start_time} to {now}...")
+    print(f"Fetching BlueSky posts for {symbol} from {start_time} to {now}...")
 
-        wait_if_needed()
-        posts = search_bluesky_posts(keywords, start_time, now)
+    wait_if_needed()
+    posts = await search_bluesky_posts(keywords, start_time, now)  # Await the asynchronous call
 
-        if posts:
-            save_posts_to_db(posts, symbol)
-            print(f"Saved {len(posts)} posts for {symbol}.")
-        else:
-            print(f"No new posts found for {symbol}.")
+    if posts:
+        save_posts_to_db(posts, symbol)
+        print(f"Saved {len(posts)} posts for {symbol}.")
+    else:
+        print(f"No new posts found for {symbol}.")
+        await asyncio.sleep(60)  # Wait 60 seconds after a failure for this symbol
+
+async def download_bluesky_posts():
+    """Download BlueSky posts concurrently for all symbols."""
+    initialize_db()
+    tasks = [fetch_and_save_posts(symbol, keywords) for symbol, keywords in config.STOCK_DICT.items()]
+    await asyncio.gather(*tasks)  # Run all tasks concurrently
 
     print("Finished fetching BlueSky posts.")
-
-if __name__ == "__main__":
-    print("Running BlueSky data collection...")
-    download_bluesky_posts()
-    print("BlueSky data collection complete.")

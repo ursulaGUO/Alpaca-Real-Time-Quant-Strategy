@@ -23,7 +23,7 @@ TIMEFRAME = "15Min"
 HISTORICAL_CHUNK_DAYS = 5
 
 # Historical Data Start Date
-CUSTOM_START_DATE = "2023-03-01T00:00:00Z"
+CUSTOM_START_DATE = "2024-10-01T00:00:00Z"
 
 # Sentiment Analysis Configuration
 SENTIMENT_START_DATE = "2025-02-10T00:00:00Z"
@@ -37,7 +37,6 @@ STOCK_DICT = {
     "MSFT": ["Microsoft"],
     "GOOGL": ["Google"],
     "AMZN": ["Amazon"],
-    "TSLA": ["Tesla"],
     "NVDA": ["Nvidia"],
     "PG": ["Procter & Gamble"],
     "KO": ["Coca-Cola"],

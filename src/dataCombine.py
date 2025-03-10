@@ -56,7 +56,6 @@ def optimize_database():
 ### =========================
 ###   FEATURE ENGINEERING
 ### =========================
-
 def compute_technical_indicators(start_time, end_time):
     """Compute technical indicators and update the stock_features table only for new data."""
     conn = sqlite3.connect(config.DB_FILE)
@@ -88,88 +87,87 @@ def compute_technical_indicators(start_time, end_time):
         )
         WITH stock_window AS (
             SELECT
-                symbol, timestamp, open, high, low, close, volume,
+                s.symbol, s.timestamp, s.open, s.high, s.low, s.close, s.volume,
 
                 -- Simple Moving Averages (SMA)
-                AVG(close) OVER (
-                    PARTITION BY symbol ORDER BY timestamp
+                AVG(s.close) OVER (
+                    PARTITION BY s.symbol ORDER BY s.timestamp
                     ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                 ) AS SMA_20,
 
-                AVG(close) OVER (
-                    PARTITION BY symbol ORDER BY timestamp
+                AVG(s.close) OVER (
+                    PARTITION BY s.symbol ORDER BY s.timestamp
                     ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
                 ) AS SMA_50,
 
-                AVG(close) OVER (
-                    PARTITION BY symbol ORDER BY timestamp
+                AVG(s.close) OVER (
+                    PARTITION BY s.symbol ORDER BY s.timestamp
                     ROWS BETWEEN 99 PRECEDING AND CURRENT ROW
                 ) AS SMA_100,
 
                 -- Volatility (Rolling Standard Deviation)
                 sqrt(
-                    AVG(close * close) OVER (
-                        PARTITION BY symbol ORDER BY timestamp
+                    AVG(s.close * s.close) OVER (
+                        PARTITION BY s.symbol ORDER BY s.timestamp
                         ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                     ) -
                     POWER(
-                        AVG(close) OVER (
-                            PARTITION BY symbol ORDER BY timestamp
+                        AVG(s.close) OVER (
+                            PARTITION BY s.symbol ORDER BY s.timestamp
                             ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                         ), 2
                     )
                 ) AS Volatility,
 
                 -- Bollinger Bands
-                (AVG(close) OVER (
-                    PARTITION BY symbol ORDER BY timestamp
+                (AVG(s.close) OVER (
+                    PARTITION BY s.symbol ORDER BY s.timestamp
                     ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                 )) + (2 * sqrt(
-                    AVG(close * close) OVER (
-                        PARTITION BY symbol ORDER BY timestamp
+                    AVG(s.close * s.close) OVER (
+                        PARTITION BY s.symbol ORDER BY s.timestamp
                         ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                     ) -
                     POWER(
-                        AVG(close) OVER (
-                            PARTITION BY symbol ORDER BY timestamp
+                        AVG(s.close) OVER (
+                            PARTITION BY s.symbol ORDER BY s.timestamp
                             ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                         ), 2
                     )
                 )) AS Bollinger_Upper,
 
-                (AVG(close) OVER (
-                    PARTITION BY symbol ORDER BY timestamp
+                (AVG(s.close) OVER (
+                    PARTITION BY s.symbol ORDER BY s.timestamp
                     ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                 )) - (2 * sqrt(
-                    AVG(close * close) OVER (
-                        PARTITION BY symbol ORDER BY timestamp
+                    AVG(s.close * s.close) OVER (
+                        PARTITION BY s.symbol ORDER BY s.timestamp
                         ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                     ) -
                     POWER(
-                        AVG(close) OVER (
-                            PARTITION BY symbol ORDER BY timestamp
+                        AVG(s.close) OVER (
+                            PARTITION BY s.symbol ORDER BY s.timestamp
                             ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                         ), 2
                     )
                 )) AS Bollinger_Lower,
 
                 -- Momentum (5-period change)
-                (close - LAG(close, 5) OVER (
-                    PARTITION BY symbol ORDER BY timestamp
-                )) AS Momentum_5
+                (s.close - (SELECT close from stock_prices s2 WHERE s2.symbol = s.symbol AND s2.timestamp < s.timestamp AND s2.timestamp > DATETIME(s.timestamp, '-5 minutes') ORDER BY s2.timestamp DESC LIMIT 1)) AS Momentum_5
 
-            FROM stock_prices
+            FROM stock_prices s
             WHERE timestamp BETWEEN '{start_time}' AND '{end_time}'
         )
         SELECT * FROM stock_window;
     """
 
-    cursor.execute("DELETE FROM stock_features WHERE timestamp BETWEEN ? AND ?", (start_time, end_time))
+    #cursor.execute("DELETE FROM stock_features WHERE timestamp BETWEEN ? AND ?", (start_time, end_time)) # Not needed
     cursor.execute(query)
     conn.commit()
     conn.close()
 
     print(f"Updated technical indicators from {start_time} to {end_time}.")
+
 
 ### =========================
 ###   MERGING STOCK & SENTIMENT DATA

@@ -4,15 +4,16 @@ import asyncio
 import sqlite3
 import pandas as pd
 from datetime import datetime, timezone
-from dataFromAlpaca import fetch_realtime_data, fetch_historical_data
+from dataFromAlpaca import fetch_historical_data, fetch_realtime_data, run_data_processing
 from dataFromBlueSky import download_bluesky_posts
 from dataCombine import merge_sentiment_data, compute_technical_indicators
-from tradeLogic import trading_loop  
+from tradeLogic import trading_loop
 
 DB_FILE = config.DB_FILE  # Use centralized configuration
 
 # Dictionary to track last recorded time for each stock
 last_recorded_time = {}
+last_sentiment_fetch = 0
 
 def get_latest_features(symbol):
     """Fetch the latest feature row from the database for the given stock."""
@@ -37,80 +38,82 @@ def get_latest_features(symbol):
 
         return df.iloc[0].values[1:]  # Exclude `symbol` column from features
 
-
-def run_data_collection():
-    """Step 1: Stream real-time stock market data from Alpaca and periodically fetch sentiment data from BlueSky."""
-    
-    print("\n[Step 1] Streaming real-time stock market data from Alpaca...")
-    try:
-        asyncio.run(fetch_realtime_data())  # Run Alpaca WebSocket stream
-    except Exception as e:
-        print(f"[ERROR] Real-time stock data streaming failed: {e}")
-        raise
-
-    # Fetch BlueSky sentiment posts every 10 minutes
-    if datetime.now().minute % 10 == 0:
-        print("\n[Step 2] Fetching sentiment data from BlueSky...")
+async def start_websocket():
+    """Runs Alpaca WebSocket handler asynchronously and ensures automatic reconnection."""
+    while True:
         try:
-            download_bluesky_posts()
-            print("[Step 2] Sentiment data collection completed successfully.")
+            print("[INFO] Starting WebSocket streaming...")
+            await fetch_realtime_data()
         except Exception as e:
-            print(f"[ERROR] Sentiment data collection failed: {e}")
-            raise
+            print(f"[ERROR] WebSocket disconnected: {e}. Reconnecting in 10 seconds...")
+            await asyncio.sleep(10)  # Wait before reconnecting
 
-def run_data_processing():
-    """Step 3: Merge stock data with sentiment data and compute technical indicators."""
-    print("\n[Step 3] Merging stock & sentiment data and computing indicators...")
+async def periodic_data_processing():
+    """Periodically runs data processing."""
+    while True:
+        print("\n[INFO] Running scheduled data processing...")
+        try:
+            # Fetch BlueSky data
+            print("\n[Step 4] Fetching BlueSky sentiment data...")
+            await download_bluesky_posts()
 
-    start_date = config.MERGE_START_DATE
-    end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            run_data_processing()
+        except Exception as e:
+            print(f"[ERROR] Periodic data processing failed: {e}")
+        await asyncio.sleep(900)  # Wait 15 minutes (900 seconds)
 
-    try:
-        print(f"Computing technical indicators from {start_date} to {end_date}...")
-        compute_technical_indicators(start_date, end_date)
-        print("[Step 3] Technical indicators computed successfully.")
-    except Exception as e:
-        print(f"[ERROR] Failed to compute technical indicators: {e}")
-        raise
-
-    try:
-        print(f"Merging sentiment data from {start_date} to {end_date}...")
-        merge_sentiment_data(start_date, end_date)
-        print("[Step 3] Merging stock and sentiment data completed successfully.")
-    except Exception as e:
-        print(f"[ERROR] Failed to merge sentiment data: {e}")
-        raise
-
-if __name__ == "__main__":
+async def main():
+    """Main async function to run historical fetch, WebSocket streaming, and periodic processing."""
     print("\n==============================")
     print("   Starting Real-Time Trading Pipeline   ")
     print("==============================\n")
 
+    # Step 1: Fetch historical stock data before real-time streaming
+    fetch_historical_data()
+
+    # Step 2: Start real-time stock data streaming
+    websocket_task = asyncio.create_task(start_websocket())
+
+    # Step 3: Start periodic data processing as a separate task
+    processing_task = asyncio.create_task(periodic_data_processing())
+
     symbols_to_trade = config.ALL_SYMBOLS
-    #fetch_historical_data()
+    previous_features = {}
+    start_flag = 1
 
     while True:
         try:
-            # Step 1: Stream Alpaca & fetch BlueSky posts periodically
-            run_data_collection()
-            # Step 2: Merge & process data 
-            run_data_processing()
-            # Step 3: Prepare feature data & execute trades
+            # Step 3: done in dataFromeAlpaca
+
+            # Step 5: Prepare feature data & execute trades
             features_dict = {}
+
             for symbol in symbols_to_trade:
                 latest_features = get_latest_features(symbol)
+
+                print(f"[DEBUG] Latest features for {symbol}: {latest_features}")
+
                 if latest_features is not None:
-                    features_dict[symbol] = latest_features
+                    if symbol in previous_features and (previous_features[symbol] == latest_features).all():
+                        print(f"No change in features for {symbol}")
+                    else:
+                        print(f"Features updated for {symbol}")
+                        features_dict[symbol] = latest_features
+                        previous_features[symbol] = latest_features  # Persist the update
 
-            trading_loop(features_dict, interval=60)
-            
-
-            
+                        # Refrain from trading in the frist iteration
+                        if start_flag == 1:
+                            start_flag = 0
+                        else:
+                            trading_loop(features_dict)
 
             print("\nPipeline iteration completed! Sleeping for 1 minute before next data fetch...\n")
-            time.sleep(60)  # Sleep for 1 minute before fetching new data
+            await asyncio.sleep(60)  # Async-friendly sleep
 
         except Exception as e:
             print(f"\nERROR: {e}")
             print("Retrying after 30 seconds...\n")
-            time.sleep(30)  # Sleep for 30 seconds before retrying
+            await asyncio.sleep(30)  # Async-friendly retry
+
+if __name__ == "__main__":
+    asyncio.run(main())  # Ensures async execution

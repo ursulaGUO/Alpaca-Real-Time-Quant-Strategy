@@ -1,52 +1,74 @@
 import sqlite3
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-import time
-import pytz
-from queryFromPost import show_table
-from dataFromBlueSky import download_bluesky_posts
+import config
+from datetime import datetime
 
-DB_FILE = "data/trade_data.db"
-
-# Define CST timezone
-UTC = pytz.utc
-CST = pytz.timezone("America/Chicago")
+### =========================
+###   DATABASE FUNCTIONS
+### =========================
 
 def get_latest_timestamps():
-    """Retrieve the latest timestamps from stock_prices and bluesky_posts."""
-    conn = sqlite3.connect(DB_FILE)
+    """Retrieve the latest timestamps from stock_prices, bluesky_posts, and merged_data."""
+    conn = sqlite3.connect(config.DB_FILE)
     cursor = conn.cursor()
 
-    # Get the latest timestamp from `stock_prices`
     cursor.execute("SELECT MAX(timestamp) FROM stock_prices")
     latest_stock_time = cursor.fetchone()[0]
 
-    # Get the latest timestamp from `bluesky_posts`
     cursor.execute("SELECT MAX(date) FROM bluesky_posts")
     latest_sentiment_time = cursor.fetchone()[0]
 
-    # Get the latest timestamp from `merged_data`
     cursor.execute("SELECT MAX(timestamp) FROM merged_data")
     latest_merge_time = cursor.fetchone()[0]
 
     conn.close()
-
     return latest_stock_time, latest_sentiment_time, latest_merge_time
 
-def compute_technical_indicators(since, until):
-    """Ensure stock_features table exists, then compute technical indicators for new stock data and update the database."""
-    conn = sqlite3.connect(DB_FILE)
+### =========================
+###   DATABASE INDEXING & PREPROCESSING
+### =========================
+
+def optimize_database():
+    """Create necessary indexes and preprocess bluesky_posts for faster joins."""
+    conn = sqlite3.connect(config.DB_FILE)
     cursor = conn.cursor()
 
-    # Ensure the `stock_features` table exists
+    # Create indexes if they don’t exist
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_stock_timestamp ON stock_features(timestamp);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_date ON bluesky_posts(date);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_keyword ON bluesky_posts(keyword);")
+
+    # Add min_time and max_time columns for fast time range filtering
+    cursor.execute("PRAGMA table_info(bluesky_posts);")
+    existing_columns = [row[1] for row in cursor.fetchall()]
+    
+    if "min_time" not in existing_columns:
+        cursor.execute("ALTER TABLE bluesky_posts ADD COLUMN min_time DATETIME;")
+    if "max_time" not in existing_columns:
+        cursor.execute("ALTER TABLE bluesky_posts ADD COLUMN max_time DATETIME;")
+
+    # Update min_time and max_time for all records
+    cursor.execute("UPDATE bluesky_posts SET min_time = DATETIME(date, '-12 hours'), max_time = DATETIME(date, '+12 hours');")
+
+    conn.commit()
+    conn.close()
+    print("Database optimized with indexes and precomputed time ranges.")
+
+### =========================
+###   FEATURE ENGINEERING
+### =========================
+
+def compute_technical_indicators(start_time, end_time):
+    """Compute technical indicators and update the stock_features table only for new data."""
+    conn = sqlite3.connect(config.DB_FILE)
+    cursor = conn.cursor()
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS stock_features (
             symbol TEXT,
-            timestamp TEXT,
+            timestamp TEXT PRIMARY KEY,
             open REAL,
             high REAL,
-            low REAl,
+            low REAL,
             close REAL,
             volume REAL,
             SMA_20 REAL,
@@ -59,49 +81,40 @@ def compute_technical_indicators(since, until):
         );
     """)
 
-    #  Compute new technical indicators and insert into `stock_features`
     query = f"""
-        INSERT INTO stock_features (symbol, open, timestamp, high, low, close, volume, SMA_20, SMA_50, SMA_100, Volatility, Bollinger_Upper, Bollinger_Lower, Momentum_5)
+        INSERT OR REPLACE INTO stock_features (
+            symbol, timestamp, open, high, low, close, volume,
+            SMA_20, SMA_50, SMA_100, Volatility, Bollinger_Upper, Bollinger_Lower, Momentum_5
+        )
         WITH stock_window AS (
             SELECT
-                symbol,
-                open,
-                timestamp,
-                high,
-                low,
-                close,
-                volume,
+                symbol, timestamp, open, high, low, close, volume,
 
                 -- Simple Moving Averages (SMA)
                 AVG(close) OVER (
-                    PARTITION BY symbol
-                    ORDER BY timestamp
+                    PARTITION BY symbol ORDER BY timestamp
                     ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                 ) AS SMA_20,
 
                 AVG(close) OVER (
-                    PARTITION BY symbol
-                    ORDER BY timestamp
+                    PARTITION BY symbol ORDER BY timestamp
                     ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
                 ) AS SMA_50,
 
                 AVG(close) OVER (
-                    PARTITION BY symbol
-                    ORDER BY timestamp
+                    PARTITION BY symbol ORDER BY timestamp
                     ROWS BETWEEN 99 PRECEDING AND CURRENT ROW
                 ) AS SMA_100,
 
                 -- Volatility (Rolling Standard Deviation)
                 sqrt(
                     AVG(close * close) OVER (
-                        PARTITION BY symbol 
-                        ORDER BY timestamp 
+                        PARTITION BY symbol ORDER BY timestamp
                         ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
-                    ) - 
+                    ) -
                     POWER(
                         AVG(close) OVER (
-                            PARTITION BY symbol 
-                            ORDER BY timestamp 
+                            PARTITION BY symbol ORDER BY timestamp
                             ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                         ), 2
                     )
@@ -109,38 +122,32 @@ def compute_technical_indicators(since, until):
 
                 -- Bollinger Bands
                 (AVG(close) OVER (
-                    PARTITION BY symbol
-                    ORDER BY timestamp
+                    PARTITION BY symbol ORDER BY timestamp
                     ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                 )) + (2 * sqrt(
                     AVG(close * close) OVER (
-                        PARTITION BY symbol 
-                        ORDER BY timestamp 
+                        PARTITION BY symbol ORDER BY timestamp
                         ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
-                    ) - 
+                    ) -
                     POWER(
                         AVG(close) OVER (
-                            PARTITION BY symbol 
-                            ORDER BY timestamp 
+                            PARTITION BY symbol ORDER BY timestamp
                             ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                         ), 2
                     )
                 )) AS Bollinger_Upper,
 
                 (AVG(close) OVER (
-                    PARTITION BY symbol
-                    ORDER BY timestamp
+                    PARTITION BY symbol ORDER BY timestamp
                     ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                 )) - (2 * sqrt(
                     AVG(close * close) OVER (
-                        PARTITION BY symbol 
-                        ORDER BY timestamp 
+                        PARTITION BY symbol ORDER BY timestamp
                         ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
-                    ) - 
+                    ) -
                     POWER(
                         AVG(close) OVER (
-                            PARTITION BY symbol 
-                            ORDER BY timestamp 
+                            PARTITION BY symbol ORDER BY timestamp
                             ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                         ), 2
                     )
@@ -152,26 +159,28 @@ def compute_technical_indicators(since, until):
                 )) AS Momentum_5
 
             FROM stock_prices
-            WHERE timestamp BETWEEN '{since}' AND '{until}'
+            WHERE timestamp BETWEEN '{start_time}' AND '{end_time}'
         )
         SELECT * FROM stock_window;
     """
-    
-    # Delete previous entries to avoid duplicates
-    cursor.execute("DELETE FROM stock_features WHERE timestamp BETWEEN ? AND ?", (since, until))
 
-    # Execute and commit
+    cursor.execute("DELETE FROM stock_features WHERE timestamp BETWEEN ? AND ?", (start_time, end_time))
     cursor.execute(query)
     conn.commit()
     conn.close()
 
-    print(f"Updated technical indicators from {since} to {until}.")
+    print(f"Updated technical indicators from {start_time} to {end_time}.")
 
+### =========================
+###   MERGING STOCK & SENTIMENT DATA
+### =========================
 
-def merge_sentiment_data(start_date, end_date):
-    """Merge stock and sentiment data while keeping previous merged data."""
-    conn = sqlite3.connect(DB_FILE)
+def merge_sentiment_data(start_time, end_time):
+    """Merge only new stock data that hasn't been merged yet."""
+    conn = sqlite3.connect(config.DB_FILE)
     cursor = conn.cursor()
+
+    print(f"Checking data to merge from {start_time} to {end_time}...")
 
     merge_query = f"""
         INSERT INTO merged_data (
@@ -184,60 +193,34 @@ def merge_sentiment_data(start_date, end_date):
             s.timestamp, s.symbol, s.open, s.high, s.low, s.close, s.volume, 
             s.SMA_20, s.SMA_50, s.SMA_100, s.Volatility, 
             s.Bollinger_Upper, s.Bollinger_Lower, s.Momentum_5,
-            COALESCE(AVG(b.sentiment_score), 0) AS sentiment_score,  -- Ensure sentiment score is computed
-            COALESCE(SUM(b.likes), 0) AS likes,  -- Ensure likes are aggregated properly
+            COALESCE(AVG(b.sentiment_score), 0) AS sentiment_score,
+            COALESCE(SUM(b.likes), 0) AS likes,
             COALESCE(SUM(b.sentiment_score * b.likes) / NULLIF(SUM(b.likes), 0), 0) AS weighted_sentiment
         FROM stock_features s
-        LEFT JOIN (
-            SELECT keyword, 
-                   date,
-                   sentiment_score, 
-                   likes
-            FROM bluesky_posts
-        ) b
-        ON b.date BETWEEN datetime(s.timestamp, '-2 hours') 
-                          AND datetime(s.timestamp, '+2 hours')
-        AND s.symbol = b.keyword
-        WHERE s.timestamp BETWEEN '{start_date}' AND '{end_date}'
+        LEFT JOIN bluesky_posts b
+        ON s.symbol = b.keyword
+        AND b.min_time <= s.timestamp 
+        AND b.max_time >= s.timestamp
+        WHERE s.timestamp > (SELECT COALESCE(MAX(timestamp), '2000-01-01') FROM merged_data)
         GROUP BY s.timestamp, s.symbol;
     """
 
-    cursor.execute("DELETE FROM merged_data WHERE timestamp BETWEEN ? AND ?", (start_date, end_date))  # Avoid duplicates
     cursor.execute(merge_query)
     conn.commit()
     conn.close()
 
-    print(f"Merged new stock & sentiment data from {start_date} to {end_date}.")
+    print(f"Merged stock & sentiment data from {start_time} to {end_time}.")
 
-
-def update_pipeline():
-    """Continuously check for new stock & sentiment data, then update merged_data."""
-    while True:
-        print("Checking for new stock & sentiment data...")
-
-        latest_stock_time, latest_sentiment_time, latest_merge_time = get_latest_timestamps()
-
-        if latest_merge_time is None or latest_merge_time == "2000-01-01 00:00:00":
-            print("No previous merged data found. Processing entire stock data...")
-            latest_merge_time = "2025-02-17"  # Start from earliest known stock data
-
-        # Define new range for processing
-        new_since = latest_merge_time
-        new_until = latest_stock_time  # Merge up to latest stock timestamp
-
-        if new_since and new_until and new_since < new_until:
-            print(f"Processing new data from {new_since} to {new_until}...")
-
-            compute_technical_indicators(new_since, new_until)
-            merge_sentiment_data(new_since, new_until)
-
-        else:
-            print("No new stock data found. Sleeping for 15 minutes...")
-
-        # Sleep before checking again
-        print("Sleeping for 15 minutes.")
-        time.sleep(15 * 60)  # 15 minutes
-
+### =========================
+###   MAIN EXECUTION
+### =========================
 
 if __name__ == "__main__":
-    update_pipeline()
+    optimize_database()
+    latest_stock_time, latest_sentiment_time, latest_merge_time = get_latest_timestamps()
+
+    if latest_stock_time and latest_sentiment_time:
+        start_time = latest_merge_time or config.MERGE_START_DATE
+        if start_time < latest_stock_time:
+            compute_technical_indicators(start_time, latest_stock_time)
+            merge_sentiment_data(start_time, latest_stock_time)

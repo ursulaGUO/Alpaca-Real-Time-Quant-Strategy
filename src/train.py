@@ -1,7 +1,8 @@
 import sqlite3
-import pandas as pd
-import numpy as np
 import pickle
+import config
+import numpy as np
+import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import StandardScaler
@@ -9,13 +10,13 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression, Lasso, Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-DB_FILE = "data/trade_data.db"
-MODEL_DIR = "model"
+### =========================
+###   DATABASE FUNCTIONS
+### =========================
 
-# Load data from SQLite
-def load_data(start_date=None, end_date=None):
-    """Load data from SQLite and dynamically retrieve column names."""
-    conn = sqlite3.connect(DB_FILE)
+def load_data():
+    """Load all available data from the merged_data table."""
+    conn = sqlite3.connect(config.DB_FILE)
     cursor = conn.cursor()
 
     # Get column names dynamically
@@ -26,47 +27,83 @@ def load_data(start_date=None, end_date=None):
     excluded_columns = {"timestamp", "symbol"}
     features = [col for col in all_columns if col not in excluded_columns]
 
-    # Load data
-    query = "SELECT * FROM merged_data"
-    if start_date and end_date:
-        query += f" WHERE timestamp BETWEEN '{start_date}' AND '{end_date}'"
-    
-    df = pd.read_sql(query, conn, parse_dates=["timestamp"])
+    # Load entire dataset
+    df = pd.read_sql("SELECT * FROM merged_data", conn, parse_dates=["timestamp"])
     df.columns = all_columns  # Explicitly set column names
     conn.close()
 
+    
+
     return df, features
 
-# Load dataset
-df, features = load_data("2025-02-17", "2025-03-03")
-df = df.sort_values(["symbol", "timestamp"])
-df["next_open"] = df.groupby("symbol")["open"].shift(-1)
-df = df.dropna().reset_index(drop=True)
+### =========================
+###   DATA PREPROCESSING
+### =========================
+def preprocess_data(df, features):
+    """Prepare data for training."""
+    print(f"Original data shape: {df.shape}")
 
-X = df[features]
-y = df["next_open"]
+    df = df.sort_values(["symbol", "timestamp"])
+    df["next_open"] = df.groupby("symbol")["open"].shift(-1)
 
-# Split dataset
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    print(f"Data after shift operation: {df.shape}")
+    print("Checking null values in `next_open` column:")
+    print(df["next_open"].isna().sum())
 
-# Standardize features
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+    df.head(200).to_csv("data/top_merged.csv")
 
-# Save scaler
-SCALER_FILE = f"{MODEL_DIR}/scaler.pkl"
-with open(SCALER_FILE, "wb") as f:
-    pickle.dump(scaler, f)
-print(f"Scaler saved to {SCALER_FILE}")
+    # Drop trade_count if it exists
+    if "trade_count" in df.columns:
+        df = df.drop(columns=["trade_count"])
+        print("Dropped 'trade_count' column due to invalid values.")
 
-# Function to train and evaluate models
-def train_and_evaluate_model(model, model_name, X_train, X_test, y_train, y_test):
+    # Drop NaN values after removing trade_count
+    df = df.dropna().reset_index(drop=True)
+    print(f"Data after dropna: {df.shape}")
+
+    # Update features list again after dropping columns
+    features = [f for f in df.columns if f not in ["next_open", "timestamp", "symbol"]]
+    
+    print(f"Final features used: {features}")
+
+    X = df[features]
+    y = df["next_open"]
+
+    print(f"Feature matrix shape: {X.shape}")
+    print(f"Target variable shape: {y.shape}")
+
+    if X.empty or y.empty:
+        raise ValueError("X or y is empty after preprocessing. Check data pipeline.")
+
+    # Split dataset
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    print(f"Train shape: {X_train.shape}, Test shape: {X_test.shape}")
+
+    # Standardize features
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    # Save scaler
+    with open("model/scaler.pkl", "wb") as f:
+        pickle.dump(scaler, f)
+
+    print("Scaler saved.")
+
+    return X_train_scaled, X_test_scaled, y_train, y_test, df, features
+
+
+### =========================
+###   TRAINING FUNCTION
+### =========================
+
+def train_and_evaluate_model(model, model_name, X_train, X_test, y_train, y_test, df, features):
     """Train, evaluate, and save a model."""
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
 
-    # Evaluate
+    # Evaluate model
     mae = mean_absolute_error(y_test, y_pred)
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
 
@@ -83,10 +120,10 @@ def train_and_evaluate_model(model, model_name, X_train, X_test, y_train, y_test
     print(f"  - Directional Accuracy: {direction_accuracy * 100:.2f}%")
 
     # Save model
-    model_file = f"{MODEL_DIR}/{model_name}.pkl"
-    with open(model_file, "wb") as f:
+    with open("model/{model_name}.pkl", "wb") as f:
         pickle.dump(model, f)
-    print(f"  - Model saved to {model_file}")
+    
+    print(f"  - Model saved.")
 
     # Save predictions
     results_df = pd.DataFrame({
@@ -101,32 +138,61 @@ def train_and_evaluate_model(model, model_name, X_train, X_test, y_train, y_test
         "sentiment": df.iloc[y_test.index]["weighted_sentiment"].values
     })
 
-    results_file = f"{MODEL_DIR}/{model_name}_predictions.csv"
-    results_df.to_csv(results_file, index=False)
-    print(f"  - Predictions saved to {results_file}")
+    results_df.to_csv(f"model/{model_name}_predictions.csv", index=False)
+    print(f"  - Predictions saved.")
 
     return model
 
-# Train and evaluate Random Forest
-rf_model = RandomForestRegressor(n_estimators=100, random_state=99, max_depth=15)
-train_and_evaluate_model(rf_model, "RandomForest", X_train_scaled, X_test_scaled, y_train, y_test)
+### =========================
+###   TRAIN ALL MODELS
+### =========================
 
-# Train and evaluate XGBoost with IFA Hyperparameter Tuning
-xgb_model = xgb.XGBRegressor(objective="reg:squarederror")
-param_grid = {
-    "n_estimators": [50, 100, 200],
-    "max_depth": [3, 6, 9],
-    "learning_rate": [0.01, 0.05, 0.1]
-}
+def train_all_models():
+    """Load data, preprocess, and train multiple models on full dataset."""
+    df, features = load_data()
+    
+    if df.empty:
+        print("No data available for training.")
+        return
 
-grid_search = GridSearchCV(xgb_model, param_grid, cv=3, scoring="neg_mean_absolute_error", verbose=1)
-grid_search.fit(X_train_scaled, y_train)
-best_xgb_model = grid_search.best_estimator_
-print(f"\nBest XGBoost Params: {grid_search.best_params_}")
-train_and_evaluate_model(best_xgb_model, "XGBoost", X_train_scaled, X_test_scaled, y_train, y_test)
+    X_train, X_test, y_train, y_test, df,features = preprocess_data(df, features)
 
-# Train and evaluate Linear Regression
-lr_model = LinearRegression()
-train_and_evaluate_model(lr_model, "LinearRegression", X_train_scaled, X_test_scaled, y_train, y_test)
+    # Train Random Forest
+    rf_model = RandomForestRegressor(n_estimators=100, random_state=99, max_depth=15)
+    train_and_evaluate_model(rf_model, "RandomForest", X_train, X_test, y_train, y_test, df,features)
 
-print("\nAll models trained and saved successfully!")
+    # Train XGBoost with Hyperparameter Tuning
+    xgb_model = xgb.XGBRegressor(objective="reg:squarederror")
+    param_grid = {
+        "n_estimators": [50, 100, 200],
+        "max_depth": [3, 6, 9],
+        "learning_rate": [0.01, 0.05, 0.1]
+    }
+
+    grid_search = GridSearchCV(xgb_model, param_grid, cv=3, scoring="neg_mean_absolute_error", verbose=1)
+    grid_search.fit(X_train, y_train)
+    best_xgb_model = grid_search.best_estimator_
+    print(f"\nBest XGBoost Params: {grid_search.best_params_}")
+    train_and_evaluate_model(best_xgb_model, "XGBoost", X_train, X_test, y_train, y_test, df,features)
+
+    # Train Linear Regression
+    lr_model = LinearRegression()
+    train_and_evaluate_model(lr_model, "LinearRegression", X_train, X_test, y_train, y_test, df,features)
+
+    print("\nLinear Regression Model Coefficients:")
+    for feature, coef in zip(features, lr_model.coef_):
+        print(f"{feature}: {coef:.4f}")
+
+    print("\nIntercept:")
+    print(f"{lr_model.intercept_:.4f}")
+
+    print("\nAll models trained and saved successfully.")
+
+### =========================
+###   MAIN EXECUTION
+### =========================
+
+if __name__ == "__main__":
+    print("Starting training process...")
+    train_all_models()
+    print("Training process complete.")

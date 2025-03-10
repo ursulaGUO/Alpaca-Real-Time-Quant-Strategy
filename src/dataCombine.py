@@ -39,7 +39,7 @@ def compute_technical_indicators(since, until):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    # ✅ Ensure the `stock_features` table exists
+    # Ensure the `stock_features` table exists
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS stock_features (
             symbol TEXT,
@@ -59,7 +59,7 @@ def compute_technical_indicators(since, until):
         );
     """)
 
-    # ✅ Compute new technical indicators and insert into `stock_features`
+    #  Compute new technical indicators and insert into `stock_features`
     query = f"""
         INSERT INTO stock_features (symbol, open, timestamp, high, low, close, volume, SMA_20, SMA_50, SMA_100, Volatility, Bollinger_Upper, Bollinger_Lower, Momentum_5)
         WITH stock_window AS (
@@ -157,10 +157,10 @@ def compute_technical_indicators(since, until):
         SELECT * FROM stock_window;
     """
     
-    # ✅ Delete previous entries to avoid duplicates
+    # Delete previous entries to avoid duplicates
     cursor.execute("DELETE FROM stock_features WHERE timestamp BETWEEN ? AND ?", (since, until))
 
-    # ✅ Execute and commit
+    # Execute and commit
     cursor.execute(query)
     conn.commit()
     conn.close()
@@ -190,12 +190,12 @@ def merge_sentiment_data(start_date, end_date):
         FROM stock_features s
         LEFT JOIN (
             SELECT keyword, 
-                   datetime(date, '-6 hours') AS date_cst,  -- Convert UTC to CST
+                   date,
                    sentiment_score, 
                    likes
             FROM bluesky_posts
         ) b
-        ON b.date_cst BETWEEN datetime(s.timestamp, '-2 hours') 
+        ON b.date BETWEEN datetime(s.timestamp, '-2 hours') 
                           AND datetime(s.timestamp, '+2 hours')
         AND s.symbol = b.keyword
         WHERE s.timestamp BETWEEN '{start_date}' AND '{end_date}'

@@ -91,6 +91,8 @@ if __name__ == "__main__":
 
     while True:
         try:
+            # Step 1: Stream Alpaca & fetch BlueSky posts periodically
+            run_data_collection()
             # Step 2: Merge & process data 
             run_data_processing()
             # Step 3: Prepare feature data & execute trades
@@ -101,9 +103,6 @@ if __name__ == "__main__":
                     features_dict[symbol] = latest_features
 
             trading_loop(features_dict, interval=60)
-            
-            # Step 1: Stream Alpaca & fetch BlueSky posts periodically
-            run_data_collection()
             
 
             

@@ -120,7 +120,7 @@ def train_and_evaluate_model(model, model_name, X_train, X_test, y_train, y_test
     print(f"  - Directional Accuracy: {direction_accuracy * 100:.2f}%")
 
     # Save model
-    with open("model/{model_name}.pkl", "wb") as f:
+    with open(f"model/{model_name}.pkl", "wb") as f:    
         pickle.dump(model, f)
     
     print(f"  - Model saved.")

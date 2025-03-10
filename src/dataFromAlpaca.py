@@ -63,8 +63,7 @@ def create_table(conn):
             high REAL,
             low REAL,
             close REAL,
-            volume INTEGER,
-            trade_count INTEGER DEFAULT NULL
+            volume INTEGER
         )
     """)
     conn.commit()
@@ -82,16 +81,15 @@ def save_to_db(conn, df):
     cursor = conn.cursor()
     for _, row in df.iterrows():
         cursor.execute("""
-            INSERT OR REPLACE INTO stock_prices (timestamp, symbol, open, high, low, close, volume, trade_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO stock_prices (timestamp, symbol, open, high, low, close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (row["timestamp"].to_pydatetime().replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), 
               row["symbol"], 
               row["open"], 
               row["high"], 
               row["low"], 
               row["close"], 
-              row["volume"], 
-              row.get("trade_count", None)))
+              row["volume"]))
     conn.commit()
 
 ### =========================

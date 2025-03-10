@@ -1,12 +1,42 @@
 import time
 import config
 import asyncio
+import sqlite3
+import pandas as pd
 from datetime import datetime, timezone
-from dataFromAlpaca import fetch_realtime_data
+from dataFromAlpaca import fetch_realtime_data, fetch_historical_data
 from dataFromBlueSky import download_bluesky_posts
 from dataCombine import merge_sentiment_data, compute_technical_indicators
+from tradeLogic import trading_loop  
 
 DB_FILE = config.DB_FILE  # Use centralized configuration
+
+# Dictionary to track last recorded time for each stock
+last_recorded_time = {}
+
+def get_latest_features(symbol):
+    """Fetch the latest feature row from the database for the given stock."""
+    with sqlite3.connect(DB_FILE) as conn:
+        query = """
+            SELECT * FROM merged_data
+            WHERE symbol = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """
+        df = pd.read_sql(query, conn, params=(symbol,))
+
+        if df.empty:
+            return None  # No data available
+
+        # Explicitly drop `trade_count`
+        if "trade_count" in df.columns:
+            df.drop(columns=["trade_count"], inplace=True)
+
+        # Update last recorded time for the stock
+        last_recorded_time[symbol] = df.iloc[0]["timestamp"]
+
+        return df.iloc[0].values[1:]  # Exclude `symbol` column from features
+
 
 def run_data_collection():
     """Step 1: Stream real-time stock market data from Alpaca and periodically fetch sentiment data from BlueSky."""
@@ -53,15 +83,30 @@ def run_data_processing():
 
 if __name__ == "__main__":
     print("\n==============================")
-    print("   Starting Real-Time Data Pipeline   ")
+    print("   Starting Real-Time Trading Pipeline   ")
     print("==============================\n")
+
+    symbols_to_trade = config.ALL_SYMBOLS
+    #fetch_historical_data()
 
     while True:
         try:
+            # Step 2: Merge & process data 
+            run_data_processing()
+            # Step 3: Prepare feature data & execute trades
+            features_dict = {}
+            for symbol in symbols_to_trade:
+                latest_features = get_latest_features(symbol)
+                if latest_features is not None:
+                    features_dict[symbol] = latest_features
+
+            trading_loop(features_dict, interval=60)
+            
             # Step 1: Stream Alpaca & fetch BlueSky posts periodically
-            run_data_collection() 
-             # Step 2: Merge & process data 
-            run_data_processing() 
+            run_data_collection()
+            
+
+            
 
             print("\nPipeline iteration completed! Sleeping for 1 minute before next data fetch...\n")
             time.sleep(60)  # Sleep for 1 minute before fetching new data

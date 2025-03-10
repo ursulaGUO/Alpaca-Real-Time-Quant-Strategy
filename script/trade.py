@@ -187,5 +187,5 @@ def trading_loop(symbols, interval=60):
 
 # Run the Trading Bot
 if __name__ == "__main__":
-    symbols_to_trade = ["AAPL", "TSLA", "GOOGL", "NVDA", "AMZN"]
+    symbols_to_trade = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "PG", "KO", "WMT", "JNJ", "GOLD"]
     trading_loop(symbols_to_trade, interval=60)  # Poll every 60 seconds

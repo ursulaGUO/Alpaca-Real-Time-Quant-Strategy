@@ -4,6 +4,9 @@ import alpaca_trade_api as tradeapi
 from datetime import datetime, timezone, timedelta
 import pandas_market_calendars as mcal
 import pytz
+import json
+import websockets
+import asyncio
 import config  # Import central config file
 
 # Initialize Alpaca API
@@ -144,46 +147,88 @@ def fetch_historical_data():
     conn.close()
     print("Historical data fetch complete.")
 
-def fetch_realtime_data():
-    """Fetch new data for stocks in real-time."""
-    conn = create_connection()
-    
-    now = datetime.now(timezone.utc) - timedelta(minutes=16)  # Ensure 15-minute delay
-    market_open_time = get_market_open_time()
-    market_close_time = get_market_close_time()
 
-    if not (market_open_time and market_close_time):
-        print("Market is closed. Skipping real-time fetch.")
-        return
+ALPACA_WS_URL = "wss://stream.data.alpaca.markets/v2/iex"  # Using IEX instead of SIP
 
-    if not (market_open_time <= now < market_close_time):
-        print("Market is currently closed. Waiting for next session.")
-        return
+# List of stock symbols to track
+SYMBOLS = list(config.STOCK_DICT.keys())
 
-    for symbol in config.ALL_SYMBOLS:
-        last_timestamp = get_last_timestamp(conn, symbol)
+# SQLite database file
+DB_FILE = config.DB_FILE
 
-        start_time = last_timestamp if last_timestamp else (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+async def save_stock_data(symbol, timestamp, open_price, high, low, close, volume):
+    """Save stock data to SQLite database."""
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
 
-        print(f"Fetching latest IEX data for {symbol} from {start_time}...")
+        # Ensure stock_data table exists
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS stock_data (
+                symbol TEXT,
+                timestamp TEXT,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                volume INTEGER,
+                PRIMARY KEY (symbol, timestamp)
+            )
+        """)
 
-        try:
-            bars = api.get_bars(symbol, config.TIMEFRAME, start=start_time, feed="iex").df
-            bars["symbol"] = symbol
-            bars.reset_index(inplace=True)
+        # Insert or update stock price data
+        cursor.execute("""
+            INSERT OR REPLACE INTO stock_data (symbol, timestamp, open, high, low, close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (symbol, timestamp, open_price, high, low, close, volume))
 
-            if bars.empty:
-                print(f"[{symbol}] No new data available.")
-                continue
-            
-            save_to_db(conn, bars)
-            print(f"[{symbol}] Latest data saved.")
+        conn.commit()
+        print(f"[Alpaca-IEX] Saved {symbol} data at {timestamp}.")
 
-        except Exception as e:
-            print(f"[{symbol}] Error fetching real-time data: {e}")
+async def alpaca_ws_handler():
+    """Connects to Alpaca WebSocket API and listens for IEX stock data."""
+    async with websockets.connect(ALPACA_WS_URL) as ws:
+        # Authenticate
+        auth_msg = json.dumps({
+            "action": "auth",
+            "key": config.ALPACA_API_KEY,
+            "secret": config.ALPACA_API_SECRET
+        })
+        await ws.send(auth_msg)
+        auth_response = await ws.recv()
+        print(f"[Alpaca-IEX] Auth Response: {auth_response}")
 
-    conn.close()
-    print("Real-time data fetch complete.")
+        # Subscribe to IEX market data
+        subscribe_msg = json.dumps({
+            "action": "subscribe",
+            "bars": SYMBOLS  # Subscribe to real-time bar updates
+        })
+        await ws.send(subscribe_msg)
+        print(f"[Alpaca-IEX] Subscribed to: {SYMBOLS}")
+
+        while True:
+            try:
+                message = await ws.recv()
+                data = json.loads(message)
+
+                for stock in data:
+                    if stock.get("T") == "bar":  # Only process bar data
+                        symbol = stock["S"]
+                        timestamp = datetime.utcfromtimestamp(stock["t"] / 1000).isoformat()
+                        open_price = stock["o"]
+                        high = stock["h"]
+                        low = stock["l"]
+                        close = stock["c"]
+                        volume = stock["v"]
+
+                        await save_stock_data(symbol, timestamp, open_price, high, low, close, volume)
+
+            except Exception as e:
+                print(f"[Alpaca-IEX] Error: {e}")
+                await asyncio.sleep(5)  # Small delay before retrying
+
+async def fetch_realtime_data():
+    """Runs Alpaca WebSocket handler asynchronously."""
+    await alpaca_ws_handler()
 
 ### =========================
 ###   MAIN EXECUTION

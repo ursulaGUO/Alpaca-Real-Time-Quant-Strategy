@@ -324,31 +324,23 @@ def filter_like(like_limit):
     print(filtered_df.shape[0])
 
 stock_dict = {
-    "AAPL": [
-        "Apple",
-    ],
-    "MSFT": [
-        "Microsoft",
-    ],
-    "GOOGL": [
-        "Google",
-    ],
-    "AMZN": [
-        "Amazon",
-    ],
-    "TSLA": [
-        "Tesla",
-    ],
-    "NVDA": [
-        "Nvidia",
-    ]
+    "AAPL": ["Apple"],
+    "MSFT": ["Microsoft"],
+    "GOOGL": ["Google"],
+    "AMZN": ["Amazon"],
+    "TSLA": ["Tesla"],
+    "NVDA": ["Nvidia"],
+    "PG": ["Procter & Gamble"],
+    "KO": ["Coca-Cola"],
+    "WMT": ["Walmart"],
+    "JNJ": ["Johnson & Johnson"],
+    "GOLD": ["Barrick Gold"]
 }
-
 def main():
     """Fetch historical data once, then update with new posts every 15 minutes."""
     
     # Step 1: Download all historical posts from 2025-02-17 to now
-    start_date = "2025-02-17"
+    start_date = "2025-02-10"
     end_date = datetime.now(timezone.utc).isoformat()  # Current time in UTC
 
     print(f"Downloading historical posts from {start_date} to {end_date}...")

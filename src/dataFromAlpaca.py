@@ -22,7 +22,7 @@ api = tradeapi.REST(api_key, api_secret, base_url, api_version='v2')
 
 
 # Define stock symbols
-symbol_list = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA']
+symbol_list = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "PG", "KO", "WMT", "JNJ", "GOLD"]
 all_symbols = symbol_list
 
 

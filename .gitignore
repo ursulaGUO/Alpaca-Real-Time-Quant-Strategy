@@ -1,2 +1,3 @@
 data/*.db
+data/trade_data.db copy
 model/*.pkl

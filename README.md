@@ -30,7 +30,8 @@ Besides these, I also handpicked several couple stocks that I think I'm relative
 * MCD (McDonald): In economic downturn, I believe people will consume more affordable food. So I longed the sotcks. 
 * SHEL (Shell): I think Trump's firm stance on protecting the auto industry in the US and shutting down climate-friendly EV industry is a strong sign to long oil companies. 
 
-# Code Structure
+# Overall Structure
+## Repository breakdown
 This is the file structure of the repository. 
 * `data` folder stores the SQLite database `trade_data.db`, and potentially some other temporary cached data used for testing.
 * `model` folder stores the result of the trained model, and the scaler.
@@ -73,6 +74,18 @@ Alpaca-Real-Time-Quant-Strategy/
 ├─ README.md
 ├─ new_file
 ```
+
+## Usage
+1. Create `~/.secrets/.env` where you store your login information with BlueSky social media and Alpaca trader api.
+2. Modify configurations in `src/config.py`.
+3. Run `src/main.py`. First run might run into issue half way because there is no models saved yet into `model` folder. After being stopped, finish step 5 and come back to rerun. 
+4. (Optional) check the table results using the files in `script` folder. 
+5. Run `src/train.py`.
+6. (Optional) check the prediction results using csv files in `model` folder.
+7. (Optional) start `src/tcp_server.py` in dedicated command line.
+8. (Optional) start `sript/backtest.py` in dedicated command line. This helps with backtesting with the existing models.
+
+
 
 # Miscellaneous
 ## File storage
@@ -122,3 +135,4 @@ Linear Regression Model Coefficients:
  - sentiment_score: 0.0024
  - likes: -0.0070
  - weighted_sentiment: -0.0064
+

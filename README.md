@@ -82,3 +82,43 @@ I use timezone-sensitive format for all timestamps, such as this `start_time = d
 
 ## Automate Data Retrieval
 This is accomplished by using `asyncio` to keep data retrieval functions running in the background.
+
+## Model Results
+
+RandomForest Performance:
+  - MAE: 0.1601
+  - RMSE: 0.7852
+  - Directional Accuracy: 88.70%
+  - Model saved.
+  - Predictions saved.
+
+XGBoost Performance:
+  - MAE: 0.3462
+  - RMSE: 1.1637
+  - Directional Accuracy: 74.61%
+  - Model saved.
+  - Predictions saved.
+
+LinearRegression Performance:
+  - MAE: 0.1189
+  - RMSE: 0.7428
+  - Directional Accuracy: 90.82%
+  - Model saved.
+  - Predictions saved.
+
+Linear Regression Model Coefficients:
+ - open: -9.6054
+ - high: 6.8342
+ - low: 7.8010
+ - close: 107.9648
+ - volume: -0.0149
+ - SMA_20: 0.5606
+ - SMA_50: -0.6763
+ - SMA_100: -0.0063
+ - Volatility: 0.0318
+ - Bollinger_Upper: 0.5532
+ - Bollinger_Lower: 0.5679
+ - Momentum_5: -0.0166
+ - sentiment_score: 0.0024
+ - likes: -0.0070
+ - weighted_sentiment: -0.0064

@@ -131,7 +131,8 @@ async def search_bluesky_posts(keyword_list, since, until, limit=100, max_retrie
 
         except (InvokeTimeoutError, httpx.ReadTimeout) as e:
             retries += 1
-            wait_time = 10 * retries  # More aggressive exponential backoff
+            # More aggressive exponential backoff
+            wait_time = 10 * retries  
             print(f"Timeout error: {e}. Retrying in {wait_time} seconds... (Attempt {retries}/{max_retries})")
             await asyncio.sleep(wait_time)
         except Exception as e: # Catch other exceptions

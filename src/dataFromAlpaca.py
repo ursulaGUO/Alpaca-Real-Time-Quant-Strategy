@@ -166,11 +166,11 @@ def fetch_historical_data():
 
         while last_timestamp_dt < now:
             if market_close_time and last_timestamp_dt >= market_close_time:
-                print(f"⏳ [{symbol}] Market closed. Stopping historical fetch.")
+                print(f"[{symbol}] Market closed. Stopping historical fetch.")
                 break
 
             if last_timestamp_dt.weekday() >= 5:  # Skip weekends
-                print(f"📅 [{symbol}] Weekend detected. Skipping fetch.")
+                print(f"[{symbol}] Weekend detected. Skipping fetch.")
                 break
 
             until_time = (last_timestamp_dt + timedelta(days=config.HISTORICAL_CHUNK_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -201,7 +201,7 @@ def fetch_historical_data():
 ###   REAL-TIME DATA FETCH
 ### =========================
 
-ALPACA_WS_URL = "wss://stream.data.alpaca.markets/v2/iex"  # Using IEX instead of SIP
+ALPACA_WS_URL = "wss://stream.data.alpaca.markets/v2/iex"  # Using IEX
 
 def get_latest_timestamp():
     """Get the latest timestamp from stock_prices, ensuring it does not go after 2024-10-01."""
@@ -275,7 +275,7 @@ async def alpaca_ws_handler():
         })
         await ws.send(auth_msg)
         auth_response = await ws.recv()
-        print(f"🔑 [Alpaca-IEX] Authenticated: {auth_response}")
+        print(f"[Alpaca-IEX] Authenticated: {auth_response}")
 
         # Subscribe to stock market data
         subscribe_msg = json.dumps({
@@ -306,7 +306,7 @@ async def alpaca_ws_handler():
                         # Save the real-time data
                         await save_stock_data(symbol, timestamp, open_price, high, low, close, volume)
 
-                # ✅ **Trigger data processing right after new data is stored**
+                # Trigger data processing right after new data is stored
                 print("\n[INFO] Running data processing after new real-time data...")
                 run_data_processing()
 

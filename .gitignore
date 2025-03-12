@@ -1,3 +1,2 @@
-data/trade_data.db
-model/RandomForest.pkldata/*.db
+data/*.db
 model/*.pkl

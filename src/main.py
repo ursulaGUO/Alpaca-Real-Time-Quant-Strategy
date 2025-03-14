@@ -102,10 +102,11 @@ async def main():
                         previous_features[symbol] = latest_features  # Persist the update
 
                         # Refrain from trading in the frist iteration
-                        if start_flag == 1:
-                            start_flag = 0
+                        if start_flag < 10:
+                            start_flag += 1
                         else:
                             trading_loop(features_dict)
+                            #print("[INFO] Not trading now")
 
             print("\nPipeline iteration completed! Sleeping for 1 minute before next data fetch...\n")
             await asyncio.sleep(60)  # Async-friendly sleep

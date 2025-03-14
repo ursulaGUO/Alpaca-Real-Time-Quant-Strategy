@@ -76,9 +76,13 @@ def preprocess_data(df, features):
         raise ValueError("X or y is empty after preprocessing. Check data pipeline.")
 
     # Split dataset
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=99
+    )
 
     print(f"Train shape: {X_train.shape}, Test shape: {X_test.shape}")
+    print(f"Rows used for training: {X_train.shape[0]}")
+    print(f"Rows used for testing: {X_test.shape[0]}")
 
     # Standardize features
     scaler = StandardScaler()
@@ -89,9 +93,8 @@ def preprocess_data(df, features):
     with open("model/scaler.pkl", "wb") as f:
         pickle.dump(scaler, f)
 
-    print("Scaler saved.")
-
     return X_train_scaled, X_test_scaled, y_train, y_test, df, features
+
 
 
 ### =========================

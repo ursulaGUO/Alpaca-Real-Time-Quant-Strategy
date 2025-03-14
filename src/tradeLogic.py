@@ -20,7 +20,7 @@ base_url = os.getenv("alpaca_api_endpoint")
 api = tradeapi.REST(api_key, api_secret, base_url, api_version="v2")
 
 # Load Trained Model & Scaler
-MODEL_FILE = "model/LinearRegression.pkl"
+MODEL_FILE = "model/RandomForest.pkl"
 SCALER_FILE = "model/scaler.pkl"
 
 with open(MODEL_FILE, "rb") as f:
@@ -34,7 +34,7 @@ INITIAL_CASH = 100000  # Start with $100,000
 cash = INITIAL_CASH
 positions = {}  # {symbol: {quantity, avg_price}}
 pending_orders = {}  # Track ongoing orders
-SHORT_THRESHOLD = -0.1  # Threshold for considering a short position
+SHORT_THRESHOLD = -0.17  # Threshold for considering a short position
 MAX_SHARES = 10       # Maximum shares to hold (long or short)
 
 def get_account_cash():
@@ -183,7 +183,7 @@ def execute_trade(symbol, open_price, predicted_next_open, cash=None, positions=
     long_position = symbol in positions and current_position > 0
 
     #Buy Condition
-    if predicted_next_open >= open_price + 0.1:
+    if predicted_next_open >= open_price + 0.17:
        #New Check
         if is_order_pending(symbol, "buy", open_price):
             print(f"[TRADE] Order to buy {symbol} has already been created")

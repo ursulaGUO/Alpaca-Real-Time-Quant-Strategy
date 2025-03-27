@@ -1,3 +1,4 @@
 data/*.db
 model/*.pkl
 data/trade_data.db copy
+.venv

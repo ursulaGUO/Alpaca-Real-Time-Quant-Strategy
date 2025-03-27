@@ -37,6 +37,7 @@ STOCK_DICT = {
     "MSFT": ["Microsoft"],
     "GOOGL": ["Google"],
     "AMZN": ["Amazon"],
+    "TSLA": ["Tesla"],
     "NVDA": ["Nvidia"],
     "PG": ["Procter & Gamble"],
     "KO": ["Coca-Cola"],

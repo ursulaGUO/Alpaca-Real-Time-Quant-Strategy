@@ -8,6 +8,10 @@ from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression, Lasso, Ridge
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.optimizers import Adam
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 ### =========================
@@ -160,9 +164,27 @@ def train_all_models():
 
     X_train, X_test, y_train, y_test, df,features = preprocess_data(df, features)
 
-    # Train Random Forest
-    rf_model = RandomForestRegressor(n_estimators=100, random_state=99, max_depth=15)
-    train_and_evaluate_model(rf_model, "RandomForest", X_train, X_test, y_train, y_test, df,features)
+    # Train Random Forest with Hyperparameter Tuning
+    rf_model = RandomForestRegressor(random_state=99)
+    param_grid = {
+        "n_estimators": [50, 100, 200],
+        "max_depth": [None, 10, 20, 30],
+        "max_features": ["auto", "sqrt", "log2"]
+    }
+
+    grid_search_rf = GridSearchCV(
+        rf_model, 
+        param_grid, 
+        cv=3, 
+        scoring="neg_mean_absolute_error", 
+        verbose=1
+    )
+    grid_search_rf.fit(X_train, y_train)
+    best_rf_model = grid_search_rf.best_estimator_
+
+    print(f"\nBest Random Forest Params: {grid_search_rf.best_params_}")
+    train_and_evaluate_model(best_rf_model, "RandomForest_Tuned", X_train, X_test, y_train, y_test, df, features)
+
 
     # Train XGBoost with Hyperparameter Tuning
     xgb_model = xgb.XGBRegressor(objective="reg:squarederror")
@@ -190,6 +212,33 @@ def train_all_models():
     print(f"{lr_model.intercept_:.4f}")
 
     print("\nAll models trained and saved successfully.")
+
+    # Train MLP
+    mlp_model = Sequential([
+        Dense(64, activation='relu',input_shape = (X_train.shape[1],)),
+        Dropout(0.2),
+        Dense(32, activation='relu'),
+        Dropout(0.2),
+        Dense(1)
+    ])
+
+    mlp_model.compile(optimizer = Adam(learning_rate=0.001),loss='mean_absolute_error')
+    history = mlp_model.fit(
+        X_train, y_train, 
+        validation_data=(X_test, y_test),
+        epochs = 100,
+        batch_size = 32,
+        verbose=1
+    )
+
+    test_loss = mlp_model.evaluate(X_test, y_test, verbose=1)
+    print(f"MLP Test MAE: {test_loss}")
+    #mlp_model.save("model/mlp_model.h5")
+
+
+
+
+
 
 ### =========================
 ###   MAIN EXECUTION
